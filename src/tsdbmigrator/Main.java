@@ -7,7 +7,6 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import org.hbase.async.Bytes;
 import org.hbase.async.HBaseClient;
@@ -26,7 +25,6 @@ import net.opentsdb.core.Internal.Cell;
 import net.opentsdb.core.Query;
 import net.opentsdb.core.RateOptions;
 import net.opentsdb.core.TSDB;
-import net.opentsdb.meta.Annotation;
 import net.opentsdb.tools.ArgP;
 import net.opentsdb.utils.Config;
 
@@ -34,23 +32,6 @@ import net.opentsdb.utils.Config;
 // import org.jboss.netty.logging.Slf4JLoggerFactory;
 
 final class Main {
-  /** Prints usage and exits with the given retval. */
-  private static void usage(final ArgP argp, final String errmsg,
-                            final int retval) {
-    System.err.println(errmsg);
-    System.err.println("Usage: scan"
-        + " [--delete|--import] START-DATE [END-DATE] query [queries...]\n"
-        + "To see the format in which queries should be written, see the help"
-        + " of the 'query' command.\n"
-        + "The --import flag changes the format in which the output is printed"
-        + " to use a format suiteable for the 'import' command instead of the"
-        + " default output format, which better represents how the data is"
-        + " stored in HBase.\n"
-        + "The --delete flag will delete every row matched by the query."
-        + "  This flag implies --import.");
-    System.err.print(argp.usage());
-    System.exit(retval);
-  }
 
   public static void main(String[] args) throws Exception {
     ArgP argp = new ArgP();
@@ -60,10 +41,9 @@ final class Main {
     argp.addOption("--delete", "Deletes rows as they are scanned.");
     args = CliOptions.parse(argp, args);
     if (args == null) {
-      usage(argp, "Invalid usage.", 1);
-    }// else if (args.length < 3) {
-      // usage(argp, "Not enough arguments.", 2);
-    // }
+      System.err.print("Invalid usage.");
+      System.exit(-1);
+    }
 
     // get a config object
     Config config = CliOptions.getConfig(argp);
@@ -101,29 +81,14 @@ final class Main {
             final byte[] key = row.get(0).key();
             final long base_time = Internal.baseTime(tsdb, key);
             final String metric = Internal.metricName(tsdb, key);
-            // Print the row key.
-              buf.append(Arrays.toString(key))
-                      .append(' ')
-                      .append(metric)
-                      .append(' ')
-                      .append(base_time)
-                      .append(" (").append(base_time).append(") ");
-              try {
-                buf.append(Internal.getTags(tsdb, key));
-              } catch (RuntimeException e) {
-                buf.append(e.getClass().getName() + ": " + e.getMessage());
-              }
-              buf.append('\n');
 
-            // Print individual cells.
-            //buf.setLength(0);
             for (final KeyValue kv : row) {
               sendDataPoint(buf, tsdb, cass, kv, base_time, metric);
               System.out.print("" + cass.buffered_mutations.getRowCount() + "\n");
               if (cass.buffered_mutations.getRowCount() > 500) {
                 cass.buffered_mutations.execute();
                 cass.buffered_mutations.discardMutations();
-                // System.out.print(buf);
+                System.out.print(buf);
               }
 
             }
@@ -144,7 +109,7 @@ final class Main {
       final long base_time,
       final String metric) {
 
-    MutationBatch mutation = cass.buffered_mutations;
+    final MutationBatch mutation = cass.buffered_mutations;
     final byte[] qualifier = kv.qualifier();
     // final byte[] value = kv.value();
     final int q_len = qualifier.length;
@@ -152,8 +117,8 @@ final class Main {
 
     final byte[] salted_key = saltKey(kv.key());
 
-    System.out.print("orig:   " + Bytes.pretty(kv.key()) + " " + kv.key().length + "\n");
-    System.out.print("salted: " + Bytes.pretty(salted_key) + " " + salted_key.length + "\n");
+    // System.out.print("orig:   " + Bytes.pretty(kv.key()) + " " + kv.key().length + "\n");
+    // System.out.print("salted: " + Bytes.pretty(salted_key) + " " + salted_key.length + "\n");
 
     if (!AppendDataPoints.isAppendDataPoints(qualifier) && q_len % 2 != 0) {
       // custom data object, not a data point
@@ -179,7 +144,6 @@ final class Main {
       int i = 0;
       for (Cell cell : cells) {
           if (i < cells.size() - 1) {
-            buf.append("\n");
             mutation.withRow(cf, salted_key)
                     .putColumn(cell.qualifier(), cell.value());
           }

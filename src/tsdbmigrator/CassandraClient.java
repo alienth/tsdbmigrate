@@ -2,27 +2,15 @@ package tsdbmigrator;
 
 import org.hbase.async.Bytes.ByteMap;
 
-// import org.apache.cassandra.thrift.Cassandra;
 import com.netflix.astyanax.AstyanaxContext;
-// import com.netflix.astyanax.ColumnListMutation;
 import com.netflix.astyanax.Keyspace;
 import com.netflix.astyanax.MutationBatch;
 import com.netflix.astyanax.connectionpool.NodeDiscoveryType;
-// import com.netflix.astyanax.connectionpool.OperationResult;
-// import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
 import com.netflix.astyanax.connectionpool.impl.ConnectionPoolConfigurationImpl;
-// import com.netflix.astyanax.connectionpool.impl.CountingConnectionPoolMonitor;
 import com.netflix.astyanax.impl.AstyanaxConfigurationImpl;
-// import com.netflix.astyanax.model.Column;
 import com.netflix.astyanax.model.ColumnFamily;
-// import com.netflix.astyanax.model.ColumnList;
-// import com.netflix.astyanax.model.ColumnMap;
 import com.netflix.astyanax.model.ConsistencyLevel;
-// import com.netflix.astyanax.query.RowQuery;
-// import com.netflix.astyanax.recipes.locks.ColumnPrefixDistributedRowLock;
-// import com.netflix.astyanax.retry.BoundedExponentialBackoff;
 import com.netflix.astyanax.serializers.BytesArraySerializer;
-// import com.netflix.astyanax.serializers.StringSerializer;
 import com.netflix.astyanax.thrift.ThriftFamilyFactory;
 
 import net.opentsdb.utils.Config;
