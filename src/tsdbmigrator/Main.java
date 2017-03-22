@@ -13,8 +13,9 @@ import org.hbase.async.HBaseClient;
 import org.hbase.async.KeyValue;
 import org.hbase.async.Scanner;
 
-import net.opentsdb.core.TSDB;
-import net.opentsdb.meta.Annotation;
+import com.netflix.astyanax.MutationBatch;
+import com.netflix.astyanax.model.ColumnFamily;
+
 import net.opentsdb.core.Aggregators;
 import net.opentsdb.core.AppendDataPoints;
 import net.opentsdb.core.Const;
@@ -23,6 +24,8 @@ import net.opentsdb.core.Internal;
 import net.opentsdb.core.Internal.Cell;
 import net.opentsdb.core.Query;
 import net.opentsdb.core.RateOptions;
+import net.opentsdb.core.TSDB;
+import net.opentsdb.meta.Annotation;
 import net.opentsdb.tools.ArgP;
 import net.opentsdb.utils.Config;
 
@@ -66,17 +69,19 @@ final class Main {
 
     final TSDB tsdb = new TSDB(config);
 
+    final CassandraClient cass = new CassandraClient(config);
+
     tsdb.checkNecessaryTablesExist().joinUninterruptibly();
     final byte[] table = config.getString("tsd.storage.hbase.data_table").getBytes();
     argp = null;
     try {
-      migrateData(tsdb, tsdb.getClient(), table);
+      migrateData(tsdb, tsdb.getClient(), cass, table);
     } finally {
       tsdb.shutdown().joinUninterruptibly();
     }
   }
 
-  public static void migrateData(TSDB tsdb, HBaseClient client, byte[] table) throws Exception {
+  public static void migrateData(TSDB tsdb, HBaseClient client, CassandraClient cass, byte[] table) throws Exception {
     // Get all keys
     // Iterate through each KV
     // Build a cassandra-friendly key
@@ -114,17 +119,24 @@ final class Main {
                 buf.append(e.getClass().getName() + ": " + e.getMessage());
               }
               buf.append('\n');
-              System.out.print(buf);
 
             // Print individual cells.
-            buf.setLength(0);
+            //buf.setLength(0);
             for (final KeyValue kv : row) {
-              // Discard everything or keep initial spaces.
-              formatKeyValue(buf, tsdb, false, kv, base_time, metric);
-              if (buf.length() > 0) {
-                buf.append('\n');
-                System.out.print(buf);
+              sendDataPoint(buf, tsdb, cass, kv, base_time, metric);
+              System.out.print("" + cass.buffered_mutations.getRowCount() + "\n");
+              if (cass.buffered_mutations.getRowCount() > 500) {
+                cass.buffered_mutations.execute();
+                cass.buffered_mutations.discardMutations();
+                // System.out.print(buf);
               }
+
+              // Discard everything or keep initial spaces.
+              // formatKeyValue(buf, tsdb, false, kv, base_time, metric);
+              // if (buf.length() > 0) {
+              //     buf.append('\n');
+              //   System.out.print(buf);
+              // }
             }
 
           }
@@ -137,6 +149,54 @@ final class Main {
                              final long base_time) {
     formatKeyValue(buf, tsdb, true, kv, base_time,
                    Internal.metricName(tsdb, kv.key()));
+  }
+
+  private static void sendDataPoint(final StringBuilder buf,
+      final TSDB tsdb,
+      final CassandraClient cass,
+      final KeyValue kv,
+      final long base_time,
+      final String metric) {
+
+    MutationBatch mutation = cass.buffered_mutations;
+    final byte[] qualifier = kv.qualifier();
+    // final byte[] value = kv.value();
+    final int q_len = qualifier.length;
+    final ColumnFamily<byte[], byte[]> cf = cass.column_family_schemas.get("t");
+
+    if (!AppendDataPoints.isAppendDataPoints(qualifier) && q_len % 2 != 0) {
+      // custom data object, not a data point
+    } else if (q_len == 2 || q_len == 4 && Internal.inMilliseconds(qualifier)) {
+      // regular data point
+      final Cell cell = Internal.parseSingleValue(kv);
+      if (cell == null) {
+        throw new IllegalDataException("Unable to parse row: " + kv);
+      }
+        mutation.withRow(cf, kv.key())
+                .putColumn(cell.qualifier(), cell.value());
+    } else {
+      final Collection<Cell> cells;
+      if (q_len == 3) {
+        // append data points
+        final AppendDataPoints adps = new AppendDataPoints();
+        cells = adps.parseKeyValue(tsdb, kv);
+      } else {
+        // compacted column
+        cells = Internal.extractDataPoints(kv);
+      }
+
+      int i = 0;
+      for (Cell cell : cells) {
+          if (i < cells.size() - 1) {
+            buf.append("\n");
+            mutation.withRow(cf, kv.key())
+                    .putColumn(cell.qualifier(), cell.value());
+          }
+        i++;
+      }
+
+
+      }
   }
 
   private static void formatKeyValue(final StringBuilder buf,
