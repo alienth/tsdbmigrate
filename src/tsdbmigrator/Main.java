@@ -1,9 +1,14 @@
 
 package tsdbmigrator;
 
+import java.util.HashMap;
+
 import org.hbase.async.HBaseClient;
 
 import net.opentsdb.core.TSDB;
+import net.opentsdb.core.Aggregators;
+import net.opentsdb.core.Query;
+import net.opentsdb.core.RateOptions;
 import net.opentsdb.tools.ArgP;
 import net.opentsdb.utils.Config;
 
@@ -58,6 +63,17 @@ final class TSDBImporter {
   }
 
   public static void migrateData(TSDB tsdb, HBaseClient client, byte[] table) { 
+    Query query = tsdb.newQuery();
+
+    RateOptions rate_options = new RateOptions(false, Long.MAX_VALUE,
+        RateOptions.DEFAULT_RESET_VALUE);
+    final HashMap<String, String> tags = new HashMap<String, String>();
+    query.setStartTime(0);
+    query.setTimeSeries("os.cpu", tags, Aggregators.get("sum"), false, rate_options);
+    // Get all keys
+    // Iterate through each KV
+    // Build a cassandra-friendly key
+    // Write out a mutation
 
   }
 }
