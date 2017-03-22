@@ -1,14 +1,11 @@
 
 package tsdbmigrator;
 
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.util.Map;
+import org.hbase.async.HBaseClient;
 
 import net.opentsdb.core.TSDB;
 import net.opentsdb.tools.ArgP;
 import net.opentsdb.utils.Config;
-import com.stumbleupon.async.Deferred;
 
 // import org.jboss.netty.logging.InternalLoggerFactory;
 // import org.jboss.netty.logging.Slf4JLoggerFactory;
@@ -52,8 +49,6 @@ final class TSDBImporter {
 
     tsdb.checkNecessaryTablesExist().joinUninterruptibly();
     final byte[] table = config.getString("tsd.storage.hbase.data_table").getBytes();
-    final boolean delete = argp.has("--delete");
-    final boolean importformat = delete || argp.has("--import");
     argp = null;
     try {
       migrateData(tsdb, tsdb.getClient(), table);
@@ -62,7 +57,7 @@ final class TSDBImporter {
     }
   }
 
-  public static void migrateData(TSDB tsdb, HBaseClient client, []byte table) { 
+  public static void migrateData(TSDB tsdb, HBaseClient client, byte[] table) { 
 
   }
 }
