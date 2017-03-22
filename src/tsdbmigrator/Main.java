@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.hbase.async.Bytes;
 import org.hbase.async.HBaseClient;
 import org.hbase.async.KeyValue;
 import org.hbase.async.Scanner;
@@ -82,12 +83,6 @@ final class Main {
   }
 
   public static void migrateData(TSDB tsdb, HBaseClient client, CassandraClient cass, byte[] table) throws Exception {
-    // Get all keys
-    // Iterate through each KV
-    // Build a cassandra-friendly key
-    // Write out a mutation
-
-
     Query query = tsdb.newQuery();
 
     RateOptions rate_options = new RateOptions(false, Long.MAX_VALUE,
@@ -131,24 +126,15 @@ final class Main {
                 // System.out.print(buf);
               }
 
-              // Discard everything or keep initial spaces.
-              // formatKeyValue(buf, tsdb, false, kv, base_time, metric);
-              // if (buf.length() > 0) {
-              //     buf.append('\n');
-              //   System.out.print(buf);
-              // }
             }
 
           }
         }
       }
-  }
-  static void formatKeyValue(final StringBuilder buf,
-                             final TSDB tsdb,
-                             final KeyValue kv,
-                             final long base_time) {
-    formatKeyValue(buf, tsdb, true, kv, base_time,
-                   Internal.metricName(tsdb, kv.key()));
+
+      if (cass.buffered_mutations.getRowCount() > 0) {
+        cass.buffered_mutations.execute();
+      }
   }
 
   private static void sendDataPoint(final StringBuilder buf,
@@ -162,7 +148,12 @@ final class Main {
     final byte[] qualifier = kv.qualifier();
     // final byte[] value = kv.value();
     final int q_len = qualifier.length;
-    final ColumnFamily<byte[], byte[]> cf = cass.column_family_schemas.get("t");
+    final ColumnFamily<byte[], byte[]> cf = cass.column_family_schemas.get("t".getBytes());
+
+    final byte[] salted_key = saltKey(kv.key());
+
+    System.out.print("orig:   " + Bytes.pretty(kv.key()) + " " + kv.key().length + "\n");
+    System.out.print("salted: " + Bytes.pretty(salted_key) + " " + salted_key.length + "\n");
 
     if (!AppendDataPoints.isAppendDataPoints(qualifier) && q_len % 2 != 0) {
       // custom data object, not a data point
@@ -172,7 +163,7 @@ final class Main {
       if (cell == null) {
         throw new IllegalDataException("Unable to parse row: " + kv);
       }
-        mutation.withRow(cf, kv.key())
+        mutation.withRow(cf, salted_key)
                 .putColumn(cell.qualifier(), cell.value());
     } else {
       final Collection<Cell> cells;
@@ -189,7 +180,7 @@ final class Main {
       for (Cell cell : cells) {
           if (i < cells.size() - 1) {
             buf.append("\n");
-            mutation.withRow(cf, kv.key())
+            mutation.withRow(cf, salted_key)
                     .putColumn(cell.qualifier(), cell.value());
           }
         i++;
@@ -199,137 +190,44 @@ final class Main {
       }
   }
 
-  private static void formatKeyValue(final StringBuilder buf,
-      final TSDB tsdb,
-      final boolean importformat,
-      final KeyValue kv,
-      final long base_time,
-      final String metric) {
+  static int SALT_WIDTH = 1;
+  static int SALT_BUCKETS = 20;
 
-    final String tags;
-    if (importformat) {
-      final StringBuilder tagsbuf = new StringBuilder();
-      for (final Map.Entry<String, String> tag
-           : Internal.getTags(tsdb, kv.key()).entrySet()) {
-        tagsbuf.append(' ').append(tag.getKey())
-          .append('=').append(tag.getValue());
-      }
-      tags = tagsbuf.toString();
-    } else {
-      tags = null;
+  // Cobbled together from RowKey.prefixKeyWithSalt
+  private static byte[] saltKey(byte[] key) {
+    final byte[] newKey = 
+        new byte[SALT_WIDTH + key.length];
+    System.arraycopy(key, 0, newKey, SALT_WIDTH, key.length);
+
+    final int tags_start = SALT_WIDTH + TSDB.metrics_width() + 
+        Const.TIMESTAMP_BYTES;
+
+    // we want the metric and tags, not the timestamp
+    final byte[] salt_base = 
+        new byte[newKey.length - SALT_WIDTH - Const.TIMESTAMP_BYTES];
+    System.arraycopy(newKey, SALT_WIDTH, salt_base, 0, TSDB.metrics_width());
+    System.arraycopy(newKey, tags_start,salt_base, TSDB.metrics_width(), 
+        newKey.length - tags_start);
+    int modulo = Arrays.hashCode(salt_base) % SALT_BUCKETS;
+    if (modulo < 0) {
+      // make sure we return a positive salt.
+      modulo = modulo * -1;
     }
 
-    final byte[] qualifier = kv.qualifier();
-    final byte[] value = kv.value();
-    final int q_len = qualifier.length;
+    final byte[] salt = getSaltBytes(modulo);
+    System.arraycopy(salt, 0, newKey, 0, SALT_WIDTH);
+    return newKey;
+  }
 
-    if (!AppendDataPoints.isAppendDataPoints(qualifier) && q_len % 2 != 0) {
-      if (!importformat) {
-        // custom data object, not a data point
-        if (kv.qualifier()[0] == Annotation.PREFIX()) {
-          appendAnnotation(buf, kv, base_time);
-        } else {
-          buf.append(Arrays.toString(value))
-            .append("\t[Not a data point]");
-        }
-      }
-    } else if (q_len == 2 || q_len == 4 && Internal.inMilliseconds(qualifier)) {
-      // regular data point
-      final Cell cell = Internal.parseSingleValue(kv);
-      if (cell == null) {
-        throw new IllegalDataException("Unable to parse row: " + kv);
-      }
-      if (!importformat) {
-        appendRawCell(buf, cell, base_time);
-      } else {
-        buf.append(metric).append(' ');
-        appendImportCell(buf, cell, base_time, tags);
-      }
-    } else {
-      final Collection<Cell> cells;
-      if (q_len == 3) {
-        // append data points
-        final AppendDataPoints adps = new AppendDataPoints();
-        cells = adps.parseKeyValue(tsdb, kv);
-      } else {
-        // compacted column
-        cells = Internal.extractDataPoints(kv);
-      }
-
-      if (!importformat) {
-        buf.append(Arrays.toString(kv.qualifier()))
-           .append('\t')
-           .append(Arrays.toString(kv.value()))
-           .append(" = ")
-           .append(cells.size())
-           .append(" values:");
-      }
-
-      int i = 0;
-      for (Cell cell : cells) {
-        if (!importformat) {
-          buf.append("\n    ");
-          appendRawCell(buf, cell, base_time);
-        } else {
-          buf.append(metric).append(' ');
-          appendImportCell(buf, cell, base_time, tags);
-          if (i < cells.size() - 1) {
-            buf.append("\n");
-          }
-        }
-        i++;
-      }
+  // RowKey.getSaltBytes
+  public static byte[] getSaltBytes(final int bucket) {
+    final byte[] bytes = new byte[SALT_WIDTH];
+    int shift = 0;
+    for (int i = 1;i <= SALT_WIDTH; i++) {
+      bytes[SALT_WIDTH - i] = (byte) (bucket >>> shift);
+      shift += 8;
     }
-  }
-
-  static void appendAnnotation(final StringBuilder buf, final KeyValue kv,
-      final long base_time) {
-    final long timestamp =
-        Internal.getTimestampFromQualifier(kv.qualifier(), base_time);
-    buf.append(Arrays.toString(kv.qualifier()))
-    .append("\t")
-    .append(Arrays.toString(kv.value()))
-    .append("\t")
-    .append(Internal.getOffsetFromQualifier(kv.qualifier(), 1) / 1000)
-    .append("\t")
-    .append(new String(kv.value(), Charset.forName("ISO-8859-1")))
-    .append("\t")
-    .append(timestamp)
-    .append("\t")
-    .append("(")
-    .append(timestamp)
-    .append(")");
-  }
-
-
-  static void appendRawCell(final StringBuilder buf, final Cell cell,
-      final long base_time) {
-    final long timestamp = cell.absoluteTimestamp(base_time);
-    buf.append(Arrays.toString(cell.qualifier()))
-    .append("\t")
-    .append(Arrays.toString(cell.value()))
-    .append("\t");
-    if ((timestamp & Const.SECOND_MASK) != 0) {
-      buf.append(Internal.getOffsetFromQualifier(cell.qualifier()));
-    } else {
-      buf.append(Internal.getOffsetFromQualifier(cell.qualifier()) / 1000);
-    }
-    buf.append("\t")
-    .append(cell.isInteger() ? "l" : "f")
-    .append("\t")
-    .append(timestamp)
-    .append("\t")
-    .append("(")
-    .append(timestamp)
-    .append(")");
-  }
-
-  static void appendImportCell(final StringBuilder buf, final Cell cell,
-      final long base_time, final String tags) {
-    buf.append(cell.absoluteTimestamp(base_time))
-    .append(" ")
-    .append(cell.parseValue())
-    .append(tags);
+    return bytes;
   }
 
 }

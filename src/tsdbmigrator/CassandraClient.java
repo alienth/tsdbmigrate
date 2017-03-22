@@ -80,10 +80,10 @@ final class CassandraClient {
 
     keyspace = context.getClient();
     context.start();
-    buffered_mutations = keyspace.prepareMutationBatch();
+    this.buffered_mutations = keyspace.prepareMutationBatch();
 
-    tsdb_table = config.getString("tsdb").getBytes();
-    tsdb_uid_table = config.getString("tsdbuid").getBytes();
+    tsdb_table = "tsdb".getBytes();
+    tsdb_uid_table = "tsdbuid".getBytes();
 
     this.column_family_schemas.put("t".getBytes(), TSDB_T);
     this.column_family_schemas.put("name".getBytes(), TSDB_UID_NAME);
