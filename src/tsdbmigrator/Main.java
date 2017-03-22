@@ -1,17 +1,18 @@
 
 package tsdbmigrator;
 
-import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 
-import org.hbase.async.Bytes;
 import org.hbase.async.HBaseClient;
+import org.hbase.async.HBaseException;
 import org.hbase.async.KeyValue;
 import org.hbase.async.Scanner;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.netflix.astyanax.MutationBatch;
 import com.netflix.astyanax.model.ColumnFamily;
@@ -33,6 +34,8 @@ import net.opentsdb.utils.Config;
 
 final class Main {
 
+  private static final Logger LOG = LoggerFactory.getLogger(Main.class);
+
   public static void main(String[] args) throws Exception {
     ArgP argp = new ArgP();
     CliOptions.addCommon(argp);
@@ -53,16 +56,53 @@ final class Main {
     final CassandraClient cass = new CassandraClient(config);
 
     tsdb.checkNecessaryTablesExist().joinUninterruptibly();
-    final byte[] table = config.getString("tsd.storage.hbase.data_table").getBytes();
     argp = null;
+
     try {
-      migrateData(tsdb, tsdb.getClient(), cass, table);
+      migrateIds(tsdb, tsdb.getClient(), cass, CliUtils.NAME_FAMILY);
+      migrateIds(tsdb, tsdb.getClient(), cass, CliUtils.ID_FAMILY);
+      // migrateData(tsdb, tsdb.getClient(), cass);
+    } catch (Exception e) {
+      LOG.error("Exception ", e);
     } finally {
       tsdb.shutdown().joinUninterruptibly();
     }
   }
 
-  public static void migrateData(TSDB tsdb, HBaseClient client, CassandraClient cass, byte[] table) throws Exception {
+  public static void migrateIds(TSDB tsdb, HBaseClient client, CassandraClient cass, byte[] family) throws Exception {
+    final Scanner scanner = client.newScanner("tsdb-uid".getBytes());
+    scanner.setMaxNumRows(1024);
+    scanner.setFamily(family);
+
+    final MutationBatch mutation = cass.buffered_mutations;
+    try {
+      ArrayList<ArrayList<KeyValue>> rows;
+      while ((rows = scanner.nextRows().joinUninterruptibly()) != null) {
+        for (final ArrayList<KeyValue> row : rows) {
+          // found |= printResult(row, CliUtils.ID_FAMILY, true);
+          final KeyValue kv = row.get(0);
+          final ColumnFamily<byte[], byte[]> cf = cass.column_family_schemas.get(kv.family());
+
+          mutation.withRow(cf, kv.key())
+                  .putColumn(kv.qualifier(), kv.value());
+
+          if (mutation.getRowCount() > 500) {
+            mutation.execute();
+            System.out.println("sent");
+          }
+        }
+      }
+    } catch (HBaseException e) {
+      LOG.error("Error while scanning HBase, scanner=" + scanner, e);
+      throw e;
+    } catch (Exception e) {
+      throw e;
+    }
+  }
+
+
+
+  public static void migrateData(TSDB tsdb, HBaseClient client, CassandraClient cass) throws Exception {
     Query query = tsdb.newQuery();
 
     RateOptions rate_options = new RateOptions(false, Long.MAX_VALUE,
