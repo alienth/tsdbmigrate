@@ -61,8 +61,7 @@ final class Main {
     argp = null;
 
     try {
-      migrateIds(tsdb, tsdb.getClient(), cass, CliUtils.ID_FAMILY);
-      migrateIds(tsdb, tsdb.getClient(), cass, CliUtils.NAME_FAMILY);
+      migrateIds(tsdb, tsdb.getClient(), cass);
       // migrateData(tsdb, tsdb.getClient(), cass, "os.cpu");
     } catch (Exception e) {
       LOG.error("Exception ", e);
@@ -71,10 +70,9 @@ final class Main {
     }
   }
 
-  public static void migrateIds(TSDB tsdb, HBaseClient client, CassandraClient cass, byte[] family) throws Exception {
+  public static void migrateIds(TSDB tsdb, HBaseClient client, CassandraClient cass) throws Exception {
     final Scanner scanner = client.newScanner("tsdb-uid".getBytes());
     scanner.setMaxNumRows(1024);
-    scanner.setFamily(family);
 
     final MutationBatch mutation = cass.buffered_mutations;
     try {
