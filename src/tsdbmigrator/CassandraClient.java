@@ -50,7 +50,7 @@ final class CassandraClient {
   public CassandraClient(final Config config) {
     ast_config = new AstyanaxConfigurationImpl()
       .setDiscoveryType(NodeDiscoveryType.RING_DESCRIBE)
-      .setDefaultWriteConsistencyLevel(ConsistencyLevel.CL_ANY);
+      .setDefaultWriteConsistencyLevel(ConsistencyLevel.CL_ALL);
     pool = new ConnectionPoolConfigurationImpl("MyConnectionPool")
       .setPort(config.getInt("asynccassandra.port"))
       .setMaxConnsPerHost(config.getInt("asynccassandra.max_conns_per_host"))

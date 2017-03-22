@@ -5,8 +5,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 
+import org.hbase.async.Bytes;
 import org.hbase.async.HBaseClient;
 import org.hbase.async.HBaseException;
 import org.hbase.async.KeyValue;
@@ -59,9 +61,9 @@ final class Main {
     argp = null;
 
     try {
-      migrateIds(tsdb, tsdb.getClient(), cass, CliUtils.NAME_FAMILY);
       migrateIds(tsdb, tsdb.getClient(), cass, CliUtils.ID_FAMILY);
-      // migrateData(tsdb, tsdb.getClient(), cass);
+      migrateIds(tsdb, tsdb.getClient(), cass, CliUtils.NAME_FAMILY);
+      // migrateData(tsdb, tsdb.getClient(), cass, "os.cpu");
     } catch (Exception e) {
       LOG.error("Exception ", e);
     } finally {
@@ -80,13 +82,16 @@ final class Main {
       while ((rows = scanner.nextRows().joinUninterruptibly()) != null) {
         for (final ArrayList<KeyValue> row : rows) {
           // found |= printResult(row, CliUtils.ID_FAMILY, true);
-          final KeyValue kv = row.get(0);
-          final ColumnFamily<byte[], byte[]> cf = cass.column_family_schemas.get(kv.family());
+          final Iterator<KeyValue> i = row.iterator();
+          while (i.hasNext()) {
+            final KeyValue kv = i.next();
+            final ColumnFamily<byte[], byte[]> cf = cass.column_family_schemas.get(kv.family());
 
-          mutation.withRow(cf, kv.key())
-                  .putColumn(kv.qualifier(), kv.value());
+            mutation.withRow(cf, kv.key())
+                    .putColumn(kv.qualifier(), kv.value());
+          }
 
-          if (mutation.getRowCount() > 500) {
+          if (mutation.getRowCount() > 5000) {
             mutation.execute();
             System.out.println("sent");
           }
@@ -98,18 +103,22 @@ final class Main {
     } catch (Exception e) {
       throw e;
     }
+
+    if (mutation.getRowCount() > 0) {
+      mutation.execute();
+    }
   }
 
 
 
-  public static void migrateData(TSDB tsdb, HBaseClient client, CassandraClient cass) throws Exception {
+  public static void migrateData(TSDB tsdb, HBaseClient client, CassandraClient cass, String metric_name) throws Exception {
     Query query = tsdb.newQuery();
 
     RateOptions rate_options = new RateOptions(false, Long.MAX_VALUE,
         RateOptions.DEFAULT_RESET_VALUE);
     final HashMap<String, String> tags = new HashMap<String, String>();
     query.setStartTime(0);
-    query.setTimeSeries("os.cpu", tags, Aggregators.get("sum"), false, rate_options);
+    query.setTimeSeries(metric_name, tags, Aggregators.get("sum"), false, rate_options);
 
     final StringBuilder buf = new StringBuilder();
     final List<Scanner> scanners = Internal.getScanners(query);
