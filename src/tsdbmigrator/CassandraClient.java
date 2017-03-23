@@ -121,12 +121,18 @@ final class CassandraClient {
     id_cache.put("tagk", new HashMap<String, String>());
     id_cache.put("tagv", new HashMap<String, String>());
     id_cache.put("metrics", new HashMap<String, String>());
+
+    ids.put("tagk", (long) 0);
+    ids.put("tagv", (long) 0);
+    ids.put("metrics", (long) 0);
   }
 
 
   final static byte[] idKey = { 0 };
 
   final static short id_width = 3;
+
+  private HashMap<String, Long> ids = new HashMap<String, Long>();
 
   public byte[] getOrCreateId(byte[] name, String kind) throws ConnectionException {
     // Check if it is already in Cassandra, if so return it.
@@ -140,18 +146,24 @@ final class CassandraClient {
       return id;
     }
 
-    byte[] idFromCass = getKeyValue(name, kind, TSDB_UID_ID_CAS);
-    if (idFromCass != null) {
-      return idFromCass;
-    }
+    // byte[] idFromCass = getKeyValue(name, kind, TSDB_UID_ID_CAS);
+    // if (idFromCass != null) {
+    //   return idFromCass;
+    // }
 
     byte[] rowKey = Bytes.fromLong((long) 1);
-    byte[] storedId = getKeyValue(idKey, kind, TSDB_UID_ID_CAS);
-    if (storedId != null) {
-      long uidLong = UniqueId.uidToLong(storedId, id_width);
-      uidLong++;
-      rowKey = Bytes.fromLong(uidLong);
-    }
+
+    long uid = ids.get(kind);
+    uid++;
+    ids.put(kind, uid);
+    rowKey = Bytes.fromLong(uid);
+
+    // byte[] storedId = getKeyValue(idKey, kind, TSDB_UID_ID_CAS);
+    // if (storedId != null) {
+    //   long uidLong = UniqueId.uidToLong(storedId, id_width);
+    //   uidLong++;
+    //   rowKey = Bytes.fromLong(uidLong);
+    // }
 
     // Verify that we're going to drop bytes that are 0.
     for (int i = 0; i < rowKey.length - id_width; i++) {
@@ -165,17 +177,14 @@ final class CassandraClient {
     // Shrink the ID on the requested number of bytes.
     rowKey = Arrays.copyOfRange(rowKey, rowKey.length - id_width, rowKey.length);
 
-    keyspace.prepareColumnMutation(TSDB_UID_ID_CAS, idKey, kind)
-      .putValue(rowKey, null)
-      .execute();
+    this.buffered_mutations.withRow(TSDB_UID_ID_CAS, idKey)
+      .putColumn(kind, rowKey);
 
-    keyspace.prepareColumnMutation(TSDB_UID_ID_CAS, name, kind)
-      .putValue(rowKey, null)
-      .execute();
+    this.buffered_mutations.withRow(TSDB_UID_ID_CAS, name)
+      .putColumn(kind, rowKey);
 
-    keyspace.prepareColumnMutation(TSDB_UID_NAME_CAS, rowKey, kind)
-      .putValue(name, null)
-      .execute();
+    this.buffered_mutations.withRow(TSDB_UID_NAME_CAS, rowKey)
+      .putColumn(kind, name);
 
     cacheMapping(kind, fromBytes(name), rowKey);
 

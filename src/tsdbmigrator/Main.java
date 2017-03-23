@@ -29,6 +29,7 @@ import net.opentsdb.core.Internal;
 import net.opentsdb.core.Internal.Cell;
 import net.opentsdb.core.Query;
 import net.opentsdb.core.RateOptions;
+import net.opentsdb.core.RowKey;
 import net.opentsdb.core.TSDB;
 import net.opentsdb.tools.ArgP;
 import net.opentsdb.utils.Config;
@@ -164,8 +165,10 @@ final class Main {
     final int q_len = qualifier.length;
     final ColumnFamily<byte[], byte[]> cf = cass.column_family_schemas.get("t".getBytes());
 
+    final String metricName = Internal.metricName(tsdb, kv.key());
+
     final byte[] salted_key = saltKey(kv.key());
-    final byte[] final_key = tagKey(cass, salted_key, Internal.getTags(tsdb, kv.key()));
+    final byte[] final_key = reIdKey(cass, salted_key, Internal.getTags(tsdb, kv.key()), metricName);
 
     System.out.print("orig:   " + Bytes.pretty(kv.key()) + " " + kv.key().length + "\n");
     System.out.print("final:  " + Bytes.pretty(final_key) + " " + final_key.length + "\n");
@@ -242,7 +245,7 @@ final class Main {
     return bytes;
   }
 
-  private static byte[] tagKey(CassandraClient cass, byte[] key, Map<String, String> tags) throws ConnectionException {
+  private static byte[] reIdKey(CassandraClient cass, byte[] key, Map<String, String> tags, String metricName) throws ConnectionException {
     final int tags_start = SALT_WIDTH + TSDB.metrics_width() +
         Const.TIMESTAMP_BYTES;
 
@@ -262,6 +265,9 @@ final class Main {
       System.arraycopy(newTagv, 0, newKey, tagPos, TSDB.tagv_width());
       tagPos += TSDB.tagv_width();
     }
+
+    final byte[] newMetric = cass.getOrCreateId(metricName.getBytes(), "metrics");
+    System.arraycopy(newMetric, 0, newKey, SALT_WIDTH, TSDB.metrics_width());
 
     return newKey;
   }
