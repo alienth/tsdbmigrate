@@ -7,6 +7,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 import org.hbase.async.Bytes;
 import org.hbase.async.HBaseClient;
@@ -17,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.netflix.astyanax.MutationBatch;
+import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
 import com.netflix.astyanax.model.ColumnFamily;
 
 import net.opentsdb.core.Aggregators;
@@ -61,8 +63,8 @@ final class Main {
     argp = null;
 
     try {
-      migrateIds(tsdb, tsdb.getClient(), cass);
-      // migrateData(tsdb, tsdb.getClient(), cass, "os.cpu");
+      // migrateIds(tsdb, tsdb.getClient(), cass);
+      migrateData(tsdb, tsdb.getClient(), cass, "os.cpu");
     } catch (Exception e) {
       LOG.error("Exception ", e);
     } finally {
@@ -114,9 +116,9 @@ final class Main {
 
     RateOptions rate_options = new RateOptions(false, Long.MAX_VALUE,
         RateOptions.DEFAULT_RESET_VALUE);
-    final HashMap<String, String> tags = new HashMap<String, String>();
+    final HashMap<String, String> t = new HashMap<String, String>();
     query.setStartTime(0);
-    query.setTimeSeries(metric_name, tags, Aggregators.get("sum"), false, rate_options);
+    query.setTimeSeries(metric_name, t, Aggregators.get("sum"), false, rate_options);
 
     final StringBuilder buf = new StringBuilder();
     final List<Scanner> scanners = Internal.getScanners(query);
@@ -154,7 +156,7 @@ final class Main {
       final CassandraClient cass,
       final KeyValue kv,
       final long base_time,
-      final String metric) {
+      final String metric) throws ConnectionException {
 
     final MutationBatch mutation = cass.buffered_mutations;
     final byte[] qualifier = kv.qualifier();
@@ -163,9 +165,10 @@ final class Main {
     final ColumnFamily<byte[], byte[]> cf = cass.column_family_schemas.get("t".getBytes());
 
     final byte[] salted_key = saltKey(kv.key());
+    final byte[] final_key = tagKey(cass, salted_key, Internal.getTags(tsdb, kv.key()));
 
-    // System.out.print("orig:   " + Bytes.pretty(kv.key()) + " " + kv.key().length + "\n");
-    // System.out.print("salted: " + Bytes.pretty(salted_key) + " " + salted_key.length + "\n");
+    System.out.print("orig:   " + Bytes.pretty(kv.key()) + " " + kv.key().length + "\n");
+    System.out.print("final:  " + Bytes.pretty(final_key) + " " + final_key.length + "\n");
 
     if (!AppendDataPoints.isAppendDataPoints(qualifier) && q_len % 2 != 0) {
       // custom data object, not a data point
@@ -175,7 +178,7 @@ final class Main {
       if (cell == null) {
         throw new IllegalDataException("Unable to parse row: " + kv);
       }
-        mutation.withRow(cf, salted_key)
+        mutation.withRow(cf, final_key)
                 .putColumn(cell.qualifier(), cell.value());
     } else {
       final Collection<Cell> cells;
@@ -191,14 +194,12 @@ final class Main {
       int i = 0;
       for (Cell cell : cells) {
           if (i < cells.size() - 1) {
-            mutation.withRow(cf, salted_key)
+            mutation.withRow(cf, final_key)
                     .putColumn(cell.qualifier(), cell.value());
           }
         i++;
       }
-
-
-      }
+    }
   }
 
   static int SALT_WIDTH = 1;
@@ -239,6 +240,30 @@ final class Main {
       shift += 8;
     }
     return bytes;
+  }
+
+  private static byte[] tagKey(CassandraClient cass, byte[] key, Map<String, String> tags) throws ConnectionException {
+    final int tags_start = SALT_WIDTH + TSDB.metrics_width() +
+        Const.TIMESTAMP_BYTES;
+
+    final byte[] newKey = new byte[key.length];
+    System.arraycopy(key, 0, newKey, 0, tags_start);
+
+    int tagPos = tags_start;
+    for (Map.Entry<String, String> entry : tags.entrySet()) {
+      String tagk = entry.getKey();
+      String tagv = entry.getValue();
+
+      final byte[] newTagk = cass.getOrCreateId(tagk.getBytes(), "tagk");
+      final byte[] newTagv = cass.getOrCreateId(tagv.getBytes(), "tagv");
+
+      System.arraycopy(newTagk, 0, newKey, tagPos, TSDB.tagk_width());
+      tagPos += TSDB.tagk_width();
+      System.arraycopy(newTagv, 0, newKey, tagPos, TSDB.tagv_width());
+      tagPos += TSDB.tagv_width();
+    }
+
+    return newKey;
   }
 
 }
