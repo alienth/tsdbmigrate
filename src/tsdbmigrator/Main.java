@@ -135,7 +135,7 @@ final class Main {
             for (final KeyValue kv : row) {
               sendDataPoint(buf, tsdb, cass, kv, base_time, metric);
               System.out.print("" + cass.buffered_mutations.getRowCount() + "\n");
-              if (cass.buffered_mutations.getRowCount() > 500) {
+              if (cass.buffered_mutations.getRowCount() > 1000) {
                 cass.buffered_mutations.execute();
                 cass.buffered_mutations.discardMutations();
                 System.out.print(buf);
