@@ -194,13 +194,9 @@ final class Main {
         cells = Internal.extractDataPoints(kv);
       }
 
-      int i = 0;
       for (Cell cell : cells) {
-          if (i < cells.size() - 1) {
-            mutation.withRow(cf, final_key)
-                    .putColumn(cell.qualifier(), cell.value());
-          }
-        i++;
+        mutation.withRow(cf, final_key)
+                .putColumn(cell.qualifier(), cell.value());
       }
     }
   }
