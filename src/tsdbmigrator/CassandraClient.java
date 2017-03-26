@@ -60,6 +60,11 @@ final class CassandraClient {
       BytesArraySerializer.get(),   // Key Serializer
       StringSerializer.get());  // Column Serializer
 
+  public static final ColumnFamily<byte[], byte[]> TSDB_T_INDEX = new ColumnFamily<byte[], byte[]>(
+      "tindex",              // Column Family Name
+      BytesArraySerializer.get(),   // Key Serializer
+      BytesArraySerializer.get());  // Column Serializer
+
   private static final Charset CHARSET = Charset.forName("ISO-8859-1");
 
 

@@ -152,6 +152,33 @@ final class Main {
       }
   }
 
+  static short METRICS_WIDTH = 3;
+  static short TAG_NAME_WIDTH = 3;
+  static short TAG_VALUE_WIDTH = 3;
+  static final short TIMESTAMP_BYTES = 4;
+
+  private static void indexMutation(byte[] orig_key, byte[] orig_column, MutationBatch mutation) {
+    // Take the first 8 bytes of the orig key and put them in the new key.
+    // Take the last 6 bytes of the orig key and all of the orig_column and put
+    // them in the new column.
+    //
+    // Take the metric of the orig key and put it in the new key
+    // Take the timestamp of the orig key, normalize it to a month, and put it in the new key
+    // Take the timestamp of the orig key and put it in the value.
+    // Take only the tags from the column name, and put them in a new column.
+
+    final byte[] ts = Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
+    final int tsInt = Bytes.getInt(ts);
+    int month = tsInt - (tsInt % (86400 * 28));
+    byte[] new_key = new byte[SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES];
+    System.arraycopy(orig_key, 0, new_key, 0, SALT_WIDTH + METRICS_WIDTH);
+    System.arraycopy(Bytes.fromInt(month), 0, new_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES);
+
+    // TODO - prevent duplicate puts here.
+    mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, orig_key.length), ts);
+  }
+
+
   private static void sendDataPoint(final StringBuilder buf,
       final TSDB tsdb,
       final CassandraClient cass,
@@ -167,8 +194,11 @@ final class Main {
 
     final String metricName = Internal.metricName(tsdb, kv.key());
 
-    final byte[] salted_key = saltKey(kv.key());
-    final byte[] final_key = reIdKey(cass, salted_key, Internal.getTags(tsdb, kv.key()), metricName);
+    byte[] key = kv.key();
+    if (SALT_WIDTH > 0) {
+      key = saltKey(kv.key());
+    }
+    final byte[] final_key = reIdKey(cass, key, Internal.getTags(tsdb, kv.key()), metricName);
 
     System.out.print("orig:   " + Bytes.pretty(kv.key()) + " " + kv.key().length + "\n");
     System.out.print("final:  " + Bytes.pretty(final_key) + " " + final_key.length + "\n");
@@ -183,6 +213,7 @@ final class Main {
       }
         mutation.withRow(cf, final_key)
                 .putColumn(cell.qualifier(), cell.value());
+        indexMutation(final_key, cell.qualifier(), mutation);
     } else {
       final Collection<Cell> cells;
       if (q_len == 3) {
@@ -197,11 +228,12 @@ final class Main {
       for (Cell cell : cells) {
         mutation.withRow(cf, final_key)
                 .putColumn(cell.qualifier(), cell.value());
+        indexMutation(final_key, cell.qualifier(), mutation);
       }
     }
   }
 
-  static int SALT_WIDTH = 1;
+  static int SALT_WIDTH = 0;
   static int SALT_BUCKETS = 20;
 
   // Cobbled together from RowKey.prefixKeyWithSalt
