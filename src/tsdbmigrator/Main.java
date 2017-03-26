@@ -135,7 +135,7 @@ final class Main {
             for (final KeyValue kv : row) {
               sendDataPoint(buf, tsdb, cass, kv, base_time, metric);
               System.out.print("" + cass.buffered_mutations.getRowCount() + "\n");
-              if (cass.buffered_mutations.getRowCount() > 1000) {
+              if (cass.buffered_mutations.getRowCount() > 500) {
                 cass.buffered_mutations.execute();
                 cass.buffered_mutations.discardMutations();
                 System.out.print(buf);
@@ -171,11 +171,14 @@ final class Main {
     final int tsInt = Bytes.getInt(ts);
     int month = tsInt - (tsInt % (86400 * 28));
     byte[] new_key = new byte[SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES];
+    byte[] new_col = new byte[TAG_NAME_WIDTH + TAG_VALUE_WIDTH + TIMESTAMP_BYTES];
     System.arraycopy(orig_key, 0, new_key, 0, SALT_WIDTH + METRICS_WIDTH);
     System.arraycopy(Bytes.fromInt(month), 0, new_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES);
+    System.arraycopy(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, new_col, 0, TAG_NAME_WIDTH + TAG_VALUE_WIDTH);
+    System.arraycopy(ts, 0, new_col, TAG_NAME_WIDTH + TAG_VALUE_WIDTH, ts.length);
 
     // TODO - prevent duplicate puts here.
-    mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, orig_key.length), ts);
+    mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
   }
 
 
