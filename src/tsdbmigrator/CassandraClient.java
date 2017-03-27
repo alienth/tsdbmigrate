@@ -179,11 +179,12 @@ final class CassandraClient {
         throw new IllegalStateException(message);
       }
     }
-    // Shrink the ID on the requested number of bytes.
-    rowKey = Arrays.copyOfRange(rowKey, rowKey.length - id_width, rowKey.length);
 
     this.buffered_mutations.withRow(TSDB_UID_ID_CAS, idKey)
       .putColumn(kind, rowKey);
+
+    // Shrink the ID on the requested number of bytes.
+    rowKey = Arrays.copyOfRange(rowKey, rowKey.length - id_width, rowKey.length);
 
     this.buffered_mutations.withRow(TSDB_UID_ID_CAS, name)
       .putColumn(kind, rowKey);
