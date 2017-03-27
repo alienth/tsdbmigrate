@@ -5,6 +5,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 import org.hbase.async.Bytes;
 import org.hbase.async.Bytes.ByteMap;
@@ -20,8 +21,11 @@ import com.netflix.astyanax.impl.AstyanaxConfigurationImpl;
 import com.netflix.astyanax.model.Column;
 import com.netflix.astyanax.model.ColumnFamily;
 import com.netflix.astyanax.model.ColumnList;
+import com.netflix.astyanax.model.ColumnMap;
 import com.netflix.astyanax.model.ConsistencyLevel;
 import com.netflix.astyanax.query.RowQuery;
+import com.netflix.astyanax.recipes.locks.ColumnPrefixDistributedRowLock;
+import com.netflix.astyanax.retry.BoundedExponentialBackoff;
 import com.netflix.astyanax.serializers.BytesArraySerializer;
 import com.netflix.astyanax.serializers.StringSerializer;
 import com.netflix.astyanax.thrift.ThriftFamilyFactory;
@@ -66,7 +70,8 @@ final class CassandraClient {
       BytesArraySerializer.get());  // Column Serializer
 
   private static final Charset CHARSET = Charset.forName("ISO-8859-1");
-
+  final int lock_timeout = 5000;
+  public static final byte[] EMPTY_ARRAY = new byte[0];
 
   /** Cache for forward mappings (name to ID). */
   private final HashMap<String, HashMap<String, byte[]>> name_cache =
@@ -139,7 +144,7 @@ final class CassandraClient {
 
   private HashMap<String, Long> ids = new HashMap<String, Long>();
 
-  public byte[] getOrCreateId(byte[] name, String kind) throws ConnectionException {
+  public byte[] getOrCreateId(byte[] name, String kind) throws ConnectionException, Exception {
     // Check if it is already in Cassandra, if so return it.
     //
     // If not, increment the 0x00 key with the proper qualifier to get the ID.
@@ -151,24 +156,22 @@ final class CassandraClient {
       return id;
     }
 
-    // byte[] idFromCass = getKeyValue(name, kind, TSDB_UID_ID_CAS);
-    // if (idFromCass != null) {
-    //   return idFromCass;
-    // }
+    byte[] idFromCass = getKeyValue(name, kind, TSDB_UID_ID_CAS);
+    if (idFromCass != null) {
+      cacheMapping(kind, fromBytes(name), idFromCass);
+      return idFromCass;
+    }
 
-    byte[] rowKey = Bytes.fromLong((long) 1);
+    System.out.println("Creating ID for " + fromBytes(name));
 
-    long uid = ids.get(kind);
-    uid++;
-    ids.put(kind, uid);
-    rowKey = Bytes.fromLong(uid);
 
-    // byte[] storedId = getKeyValue(idKey, kind, TSDB_UID_ID_CAS);
-    // if (storedId != null) {
-    //   long uidLong = UniqueId.uidToLong(storedId, id_width);
-    //   uidLong++;
-    //   rowKey = Bytes.fromLong(uidLong);
-    // }
+    long uid = atomicIncrement(kind);
+    if (uid == 0) {
+      final String message = "Unable to get ID for kind " + kind;
+      throw new Exception(message);
+    }
+
+    byte[] rowKey = Bytes.fromLong(uid);
 
     // Verify that we're going to drop bytes that are 0.
     for (int i = 0; i < rowKey.length - id_width; i++) {
@@ -180,17 +183,18 @@ final class CassandraClient {
       }
     }
 
-    this.buffered_mutations.withRow(TSDB_UID_ID_CAS, idKey)
-      .putColumn(kind, rowKey);
-
     // Shrink the ID on the requested number of bytes.
     rowKey = Arrays.copyOfRange(rowKey, rowKey.length - id_width, rowKey.length);
 
-    this.buffered_mutations.withRow(TSDB_UID_ID_CAS, name)
-      .putColumn(kind, rowKey);
+    if (!compareAndSet(TSDB_UID_NAME_CAS, rowKey, kind, name, EMPTY_ARRAY)) {
+      final String message = "Unable to set name for " + fromBytes(name);
+      throw new Exception(message);
+    }
 
-    this.buffered_mutations.withRow(TSDB_UID_NAME_CAS, rowKey)
-      .putColumn(kind, name);
+    if (!compareAndSet(TSDB_UID_ID_CAS, name, kind, rowKey, EMPTY_ARRAY)) {
+      final String message = "Unable to set ID for " + fromBytes(name);
+      throw new Exception(message);
+    }
 
     cacheMapping(kind, fromBytes(name), rowKey);
 
@@ -269,5 +273,78 @@ final class CassandraClient {
 
 
 
+  public long atomicIncrement(String kind) {
+
+    ColumnPrefixDistributedRowLock<byte[]> lock = 
+        new ColumnPrefixDistributedRowLock<byte[]>(keyspace, 
+            TSDB_UID_ID_CAS, idKey)
+            .withBackoff(new BoundedExponentialBackoff(250, 10000, 10))
+            .expireLockAfter(lock_timeout, TimeUnit.MILLISECONDS);
+    try {
+      final ColumnMap<String> columns = lock.acquireLockAndReadRow();
+              
+      // Modify a value and add it to a batch mutation
+      long value = 1;
+      if (columns.get(kind) != null) {
+        value = columns.get(kind).getLongValue() + 1;
+      }
+      final MutationBatch mutation = keyspace.prepareMutationBatch();
+      mutation.setConsistencyLevel(ConsistencyLevel.CL_EACH_QUORUM);
+      mutation.withRow(TSDB_UID_ID_CAS, idKey)
+        .putColumn(kind, value, null);
+      lock.releaseWithMutation(mutation);
+      return value;
+    } catch (Exception e) {
+      try {
+        lock.release();
+      } catch (Exception e1) {
+        System.out.println("Error releasing lock post exception for kind: " + kind + ". Error: " + e1);
+      }
+      
+      return 0;
+    }
+  }
+
+
+  public boolean compareAndSet(ColumnFamily<byte[], String> cf, byte[] key, String column, byte[] value, byte[] expected) {
+    
+    ColumnPrefixDistributedRowLock<byte[]> lock = 
+        new ColumnPrefixDistributedRowLock<byte[]>(keyspace, cf,
+            key)
+            .withBackoff(new BoundedExponentialBackoff(250, 10000, 10))
+            .withConsistencyLevel(ConsistencyLevel.CL_EACH_QUORUM)
+            .expireLockAfter(lock_timeout, TimeUnit.MILLISECONDS);
+    try {
+      final ColumnMap<String> columns = lock.acquireLockAndReadRow();
+      final MutationBatch mutation = keyspace.prepareMutationBatch();
+      mutation.setConsistencyLevel(ConsistencyLevel.CL_EACH_QUORUM);
+      mutation.withRow(cf, key)
+        .putColumn(column, value, null);
+      
+      if (columns.get(column) == null && (expected == null || expected.length < 1)) {
+        lock.releaseWithMutation(mutation);
+        return true;
+      } else if (expected != null && columns.get(column) != null &&
+          Bytes.memcmpMaybeNull(columns.get(column).getByteArrayValue(), 
+              expected) == 0) {
+        lock.releaseWithMutation(mutation);
+        return false;
+      }
+      
+      try {
+        lock.release();
+      } catch (Exception e) {
+        System.out.println("Error releasing lock post exception for key: " + Bytes.pretty(key) + ". Err: " + e);
+      }
+      return false;
+    } catch (Exception e) {
+      try {
+        lock.release();
+      } catch (Exception e1) {
+        System.out.println("Error releasing lock post exception for key: " + Bytes.pretty(key) + ". Err: " + e);
+      }
+      return false;
+    }
+  }
 
 }

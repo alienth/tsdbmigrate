@@ -187,7 +187,7 @@ final class Main {
       final CassandraClient cass,
       final KeyValue kv,
       final long base_time,
-      final String metric) throws ConnectionException {
+      final String metric) throws ConnectionException, Exception {
 
     final MutationBatch mutation = cass.buffered_mutations;
     final byte[] qualifier = kv.qualifier();
@@ -236,8 +236,8 @@ final class Main {
     }
   }
 
-  static int SALT_WIDTH = 0;
-  static int SALT_BUCKETS = 20;
+  static int SALT_WIDTH = 1;
+  static int SALT_BUCKETS = 5;
 
   // Cobbled together from RowKey.prefixKeyWithSalt
   private static byte[] saltKey(byte[] key) {
@@ -276,7 +276,7 @@ final class Main {
     return bytes;
   }
 
-  private static byte[] reIdKey(CassandraClient cass, byte[] key, Map<String, String> tags, String metricName) throws ConnectionException {
+  private static byte[] reIdKey(CassandraClient cass, byte[] key, Map<String, String> tags, String metricName) throws ConnectionException, Exception {
     final int tags_start = SALT_WIDTH + TSDB.metrics_width() +
         Const.TIMESTAMP_BYTES;
 
