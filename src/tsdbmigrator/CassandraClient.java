@@ -291,7 +291,7 @@ final class CassandraClient {
         value = columns.get(kind).getLongValue() + 1;
       }
       final MutationBatch mutation = keyspace.prepareMutationBatch();
-      mutation.setConsistencyLevel(ConsistencyLevel.CL_EACH_QUORUM);
+      mutation.setConsistencyLevel(ConsistencyLevel.CL_ANY);
       mutation.withRow(TSDB_UID_ID_CAS, idKey)
         .putColumn(kind, value, null);
       lock.releaseWithMutation(mutation);
@@ -314,7 +314,7 @@ final class CassandraClient {
         new ColumnPrefixDistributedRowLock<byte[]>(keyspace, lockCf,
             column)
             .withBackoff(new BoundedExponentialBackoff(250, 10000, 10))
-            .withConsistencyLevel(ConsistencyLevel.CL_EACH_QUORUM)
+            .withConsistencyLevel(ConsistencyLevel.CL_ANY)
             .withTtl(30)
             .expireLockAfter(lock_timeout, TimeUnit.MILLISECONDS);
     try {
@@ -326,7 +326,7 @@ final class CassandraClient {
         // The common case - there is no value here.
       }
       final MutationBatch mutation = keyspace.prepareMutationBatch();
-      mutation.setConsistencyLevel(ConsistencyLevel.CL_EACH_QUORUM);
+      mutation.setConsistencyLevel(ConsistencyLevel.CL_ANY);
       mutation.withRow(cf, key)
         .putColumn(column, v, null);
       
