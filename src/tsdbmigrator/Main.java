@@ -186,7 +186,8 @@ final class Main {
     System.arraycopy(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, new_col, TIMESTAMP_BYTES, new_col.length - TIMESTAMP_BYTES);
 
     // TODO - prevent duplicate puts here.
-    mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
+    mutation.withTimestamp(month * 1000 * 1000) // microseconds
+            .withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
   }
 
 
@@ -222,7 +223,8 @@ final class Main {
       if (cell == null) {
         throw new IllegalDataException("Unable to parse row: " + kv);
       }
-        mutation.withRow(cf, final_key)
+        mutation.withTimestamp(base_time * 1000 * 1000) // microseconds
+                .withRow(cf, final_key)
                 .putColumn(cell.qualifier(), cell.value());
         indexMutation(final_key, cell.qualifier(), mutation);
     } else {
