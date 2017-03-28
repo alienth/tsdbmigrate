@@ -211,7 +211,7 @@ final class CassandraClient {
         .execute().getResult();
 
       for (Column<byte[]> c : result) {
-        if (c.getName().equals(column)) {
+        if (Bytes.memcmp(c.getName(), column) == 0) {
           return c.getByteArrayValue();
         }
       }
