@@ -163,7 +163,7 @@ final class CassandraClient {
       return idFromCass;
     }
 
-    System.out.println("Creating ID for " + fromBytes(name));
+    // System.out.println("Creating ID for " + fromBytes(name));
 
 
     long uid = atomicIncrement(kind);

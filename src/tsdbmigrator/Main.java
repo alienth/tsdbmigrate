@@ -32,6 +32,7 @@ import net.opentsdb.core.RateOptions;
 import net.opentsdb.core.RowKey;
 import net.opentsdb.core.TSDB;
 import net.opentsdb.tools.ArgP;
+import net.opentsdb.uid.NoSuchUniqueName;
 import net.opentsdb.utils.Config;
 
 // import org.jboss.netty.logging.InternalLoggerFactory;
@@ -67,7 +68,6 @@ final class Main {
     final int stop = Integer.parseInt(argp.get("--stop", "2114413200"));
     final String[] metrics = argp.get("--metrics", "os.cpu").split(",");
     tsdb.checkNecessaryTablesExist().joinUninterruptibly();
-    System.out.println("Args " + argp);
     argp = null;
 
 
@@ -122,7 +122,12 @@ final class Main {
     final HashMap<String, String> t = new HashMap<String, String>();
     query.setStartTime(start);
     query.setEndTime(stop);
+    try {
     query.setTimeSeries(metric_name, t, Aggregators.get("sum"), false, rate_options);
+    } catch (NoSuchUniqueName e) {
+      System.out.println("Can't find metric. Skipping " + metric_name);
+      return;
+    }
 
     final StringBuilder buf = new StringBuilder();
     final List<Scanner> scanners = Internal.getScanners(query);
@@ -137,7 +142,6 @@ final class Main {
 
             for (final KeyValue kv : row) {
               sendDataPoint(buf, tsdb, cass, kv, base_time, metric);
-              System.out.print("" + cass.buffered_mutations.getRowCount() + "\n");
               if (cass.buffered_mutations.getRowCount() > 500) {
                 cass.buffered_mutations.execute();
                 cass.buffered_mutations.discardMutations();
@@ -153,6 +157,7 @@ final class Main {
       if (cass.buffered_mutations.getRowCount() > 0) {
         cass.buffered_mutations.execute();
       }
+    System.out.println("Done with metric " + metric_name);
   }
 
   static short METRICS_WIDTH = 3;
@@ -206,8 +211,8 @@ final class Main {
     }
     final byte[] final_key = reIdKey(cass, key, Internal.getTags(tsdb, kv.key()), metricName);
 
-    System.out.print("orig:   " + Bytes.pretty(kv.key()) + " " + kv.key().length + "\n");
-    System.out.print("final:  " + Bytes.pretty(final_key) + " " + final_key.length + "\n");
+    // System.out.print("orig:   " + Bytes.pretty(kv.key()) + " " + kv.key().length + "\n");
+    // System.out.print("final:  " + Bytes.pretty(final_key) + " " + final_key.length + "\n");
 
     if (!AppendDataPoints.isAppendDataPoints(qualifier) && q_len % 2 != 0) {
       // custom data object, not a data point
