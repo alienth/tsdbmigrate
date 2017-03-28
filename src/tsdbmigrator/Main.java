@@ -47,9 +47,9 @@ final class Main {
     argp.addOption("--import", "Prints the rows in a format suitable for"
                    + " the 'import' command.");
     argp.addOption("--delete", "Deletes rows as they are scanned.");
-    argp.addOption("--start", "Start time.");
-    argp.addOption("--stop", "Stop time.");
-    argp.addOption("--metrics", "Metrics");
+    argp.addOption("--start", "START", "Start time.");
+    argp.addOption("--stop", "STOP", "Stop time.");
+    argp.addOption("--metrics", "os.cpu", "Metrics");
     args = CliOptions.parse(argp, args);
     if (args == null) {
       System.err.print("Invalid usage.");
@@ -67,6 +67,7 @@ final class Main {
     final int stop = Integer.parseInt(argp.get("--stop", "2114413200"));
     final String[] metrics = argp.get("--metrics", "os.cpu").split(",");
     tsdb.checkNecessaryTablesExist().joinUninterruptibly();
+    System.out.println("Args " + argp);
     argp = null;
 
 
