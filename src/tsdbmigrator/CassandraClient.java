@@ -24,6 +24,7 @@ import com.netflix.astyanax.model.ColumnList;
 import com.netflix.astyanax.model.ColumnMap;
 import com.netflix.astyanax.model.ConsistencyLevel;
 import com.netflix.astyanax.query.RowQuery;
+import com.netflix.astyanax.recipes.locks.BusyLockException;
 import com.netflix.astyanax.recipes.locks.ColumnPrefixDistributedRowLock;
 import com.netflix.astyanax.retry.BoundedExponentialBackoff;
 import com.netflix.astyanax.serializers.BytesArraySerializer;
@@ -156,7 +157,7 @@ final class CassandraClient {
       return id;
     }
 
-    byte[] idFromCass = getKeyValue(name, kind, TSDB_UID_ID_CAS);
+    byte[] idFromCass = getKeyValue(toBytes(kind), name, TSDB_UID_ID);
     if (idFromCass != null) {
       cacheMapping(kind, fromBytes(name), idFromCass);
       return idFromCass;
@@ -186,12 +187,12 @@ final class CassandraClient {
     // Shrink the ID on the requested number of bytes.
     rowKey = Arrays.copyOfRange(rowKey, rowKey.length - id_width, rowKey.length);
 
-    if (!compareAndSet(TSDB_UID_NAME_CAS, rowKey, kind, name, EMPTY_ARRAY)) {
+    if (!compareAndSet(TSDB_UID_NAME_CAS, TSDB_UID_NAME, rowKey, toBytes(kind), name, EMPTY_ARRAY)) {
       final String message = "Unable to set name for " + fromBytes(name);
       throw new Exception(message);
     }
 
-    if (!compareAndSet(TSDB_UID_ID_CAS, name, kind, rowKey, EMPTY_ARRAY)) {
+    if (!compareAndSet(TSDB_UID_ID_CAS, TSDB_UID_ID, name, toBytes(kind), rowKey, EMPTY_ARRAY)) {
       final String message = "Unable to set ID for " + fromBytes(name);
       throw new Exception(message);
     }
@@ -201,15 +202,15 @@ final class CassandraClient {
     return rowKey;
   }
 
-  public byte[] getKeyValue(byte[] key, String column, ColumnFamily<byte[], String> cf) throws ConnectionException {
+  public byte[] getKeyValue(byte[] key, byte[] column, ColumnFamily<byte[], byte[]> cf) throws ConnectionException {
 
 
     try {
-      ColumnList<String> result = keyspace.prepareQuery(cf)
+      ColumnList<byte[]> result = keyspace.prepareQuery(cf)
         .getKey(key)
         .execute().getResult();
 
-      for (Column<String> c : result) {
+      for (Column<byte[]> c : result) {
         if (c.getName().equals(column)) {
           return c.getByteArrayValue();
         }
@@ -221,11 +222,11 @@ final class CassandraClient {
 
   }
 
-  private static byte[] toBytes(final String s) {
+  public static byte[] toBytes(final String s) {
     return s.getBytes(CHARSET);
   }
 
-  private static String fromBytes(final byte[] b) {
+  public static String fromBytes(final byte[] b) {
     return new String(b, CHARSET);
   }
 
@@ -279,6 +280,7 @@ final class CassandraClient {
         new ColumnPrefixDistributedRowLock<byte[]>(keyspace, 
             TSDB_UID_ID_CAS, idKey)
             .withBackoff(new BoundedExponentialBackoff(250, 10000, 10))
+            .withTtl(30)
             .expireLockAfter(lock_timeout, TimeUnit.MILLISECONDS);
     try {
       final ColumnMap<String> columns = lock.acquireLockAndReadRow();
@@ -306,29 +308,38 @@ final class CassandraClient {
   }
 
 
-  public boolean compareAndSet(ColumnFamily<byte[], String> cf, byte[] key, String column, byte[] value, byte[] expected) {
+  public boolean compareAndSet(ColumnFamily<byte[], String> lockCf, ColumnFamily<byte[], byte[]> cf, byte[] key, byte[] column, byte[] v, byte[] expected) {
     
     ColumnPrefixDistributedRowLock<byte[]> lock = 
-        new ColumnPrefixDistributedRowLock<byte[]>(keyspace, cf,
-            key)
+        new ColumnPrefixDistributedRowLock<byte[]>(keyspace, lockCf,
+            column)
             .withBackoff(new BoundedExponentialBackoff(250, 10000, 10))
             .withConsistencyLevel(ConsistencyLevel.CL_EACH_QUORUM)
+            .withTtl(30)
             .expireLockAfter(lock_timeout, TimeUnit.MILLISECONDS);
     try {
-      final ColumnMap<String> columns = lock.acquireLockAndReadRow();
+      lock.acquire();
+      byte[] value = null;
+      try {
+        value = keyspace.prepareQuery(cf).getKey(key).getColumn(column).execute().getResult().getByteArrayValue();
+      } catch (NotFoundException e) {
+        // The common case - there is no value here.
+      }
       final MutationBatch mutation = keyspace.prepareMutationBatch();
       mutation.setConsistencyLevel(ConsistencyLevel.CL_EACH_QUORUM);
       mutation.withRow(cf, key)
-        .putColumn(column, value, null);
+        .putColumn(column, v, null);
       
-      if (columns.get(column) == null && (expected == null || expected.length < 1)) {
-        lock.releaseWithMutation(mutation);
+      if (value == null && (expected == null || expected.length < 1)) {
+        // Have to separate the mutation and the release due to differing serialization types.
+        mutation.execute();
+        lock.release();
         return true;
-      } else if (expected != null && columns.get(column) != null &&
-          Bytes.memcmpMaybeNull(columns.get(column).getByteArrayValue(), 
-              expected) == 0) {
-        lock.releaseWithMutation(mutation);
-        return false;
+      } else if (expected != null && value != null &&
+          Bytes.memcmpMaybeNull(value, expected) == 0) {
+        mutation.execute();
+        lock.release();
+        return true;
       }
       
       try {

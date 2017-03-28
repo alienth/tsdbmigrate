@@ -64,7 +64,7 @@ final class Main {
     argp = null;
 
     try {
-      // migrateIds(tsdb, tsdb.getClient(), cass);
+      migrateIds(tsdb, tsdb.getClient(), cass);
       migrateData(tsdb, tsdb.getClient(), cass, "os.cpu");
     } catch (Exception e) {
       LOG.error("Exception ", e);
@@ -77,7 +77,6 @@ final class Main {
     final Scanner scanner = client.newScanner("tsdb-uid".getBytes());
     scanner.setMaxNumRows(1024);
 
-    final MutationBatch mutation = cass.buffered_mutations;
     try {
       ArrayList<ArrayList<KeyValue>> rows;
       while ((rows = scanner.nextRows().joinUninterruptibly()) != null) {
@@ -86,16 +85,12 @@ final class Main {
           final Iterator<KeyValue> i = row.iterator();
           while (i.hasNext()) {
             final KeyValue kv = i.next();
-            final ColumnFamily<byte[], byte[]> cf = cass.column_family_schemas.get(kv.family());
+            if (Bytes.memcmp(kv.family(), "id".getBytes()) == 0 && Bytes.memcmp(kv.key(), CassandraClient.idKey) != 0) {
+              cass.getOrCreateId(kv.key(), CassandraClient.fromBytes(kv.qualifier()));
+            }
 
-            mutation.withRow(cf, kv.key())
-                    .putColumn(kv.qualifier(), kv.value());
           }
 
-          if (mutation.getRowCount() > 5000) {
-            mutation.execute();
-            System.out.println("sent");
-          }
         }
       }
     } catch (HBaseException e) {
@@ -105,9 +100,6 @@ final class Main {
       throw e;
     }
 
-    if (mutation.getRowCount() > 0) {
-      mutation.execute();
-    }
   }
 
 
