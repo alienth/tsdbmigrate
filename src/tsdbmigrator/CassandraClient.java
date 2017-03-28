@@ -98,7 +98,7 @@ final class CassandraClient {
   public CassandraClient(final Config config) {
     ast_config = new AstyanaxConfigurationImpl()
       .setDiscoveryType(NodeDiscoveryType.RING_DESCRIBE)
-      .setDefaultWriteConsistencyLevel(ConsistencyLevel.CL_ANY);
+      .setDefaultWriteConsistencyLevel(ConsistencyLevel.CL_LOCAL_QUORUM);
     pool = new ConnectionPoolConfigurationImpl("MyConnectionPool")
       .setPort(config.getInt("asynccassandra.port"))
       .setMaxConnsPerHost(config.getInt("asynccassandra.max_conns_per_host"))
@@ -291,7 +291,7 @@ final class CassandraClient {
         value = columns.get(kind).getLongValue() + 1;
       }
       final MutationBatch mutation = keyspace.prepareMutationBatch();
-      mutation.setConsistencyLevel(ConsistencyLevel.CL_ANY);
+      mutation.setConsistencyLevel(ConsistencyLevel.CL_LOCAL_QUORUM);
       mutation.withRow(TSDB_UID_ID_CAS, idKey)
         .putColumn(kind, value, null);
       lock.releaseWithMutation(mutation);
@@ -314,7 +314,7 @@ final class CassandraClient {
         new ColumnPrefixDistributedRowLock<byte[]>(keyspace, lockCf,
             column)
             .withBackoff(new BoundedExponentialBackoff(250, 10000, 10))
-            .withConsistencyLevel(ConsistencyLevel.CL_ONE)
+            .withConsistencyLevel(ConsistencyLevel.CL_LOCAL_QUORUM)
             .withTtl(30)
             .expireLockAfter(lock_timeout, TimeUnit.MILLISECONDS);
     try {
@@ -326,7 +326,7 @@ final class CassandraClient {
         // The common case - there is no value here.
       }
       final MutationBatch mutation = keyspace.prepareMutationBatch();
-      mutation.setConsistencyLevel(ConsistencyLevel.CL_ANY);
+      mutation.setConsistencyLevel(ConsistencyLevel.CL_LOCAL_QUORUM);
       mutation.withRow(cf, key)
         .putColumn(column, v, null);
       
