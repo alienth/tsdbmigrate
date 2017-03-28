@@ -314,7 +314,7 @@ final class CassandraClient {
         new ColumnPrefixDistributedRowLock<byte[]>(keyspace, lockCf,
             column)
             .withBackoff(new BoundedExponentialBackoff(250, 10000, 10))
-            .withConsistencyLevel(ConsistencyLevel.CL_ANY)
+            .withConsistencyLevel(ConsistencyLevel.CL_ONE)
             .withTtl(30)
             .expireLockAfter(lock_timeout, TimeUnit.MILLISECONDS);
     try {
