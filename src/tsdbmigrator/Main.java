@@ -47,6 +47,9 @@ final class Main {
     argp.addOption("--import", "Prints the rows in a format suitable for"
                    + " the 'import' command.");
     argp.addOption("--delete", "Deletes rows as they are scanned.");
+    argp.addOption("--start", "Start time.");
+    argp.addOption("--stop", "Stop time.");
+    argp.addOption("--metrics", "Metrics");
     args = CliOptions.parse(argp, args);
     if (args == null) {
       System.err.print("Invalid usage.");
@@ -60,12 +63,18 @@ final class Main {
 
     final CassandraClient cass = new CassandraClient(config);
 
+    final int start = Integer.parseInt(argp.get("--start", "0"));
+    final int stop = Integer.parseInt(argp.get("--stop", "2114413200"));
+    final String[] metrics = argp.get("--metrics", "os.cpu").split(",");
     tsdb.checkNecessaryTablesExist().joinUninterruptibly();
     argp = null;
 
+
     try {
-      migrateIds(tsdb, tsdb.getClient(), cass);
-      migrateData(tsdb, tsdb.getClient(), cass, "os.cpu");
+      // migrateIds(tsdb, tsdb.getClient(), cass);
+      for (String metric : metrics) {
+        migrateData(tsdb, tsdb.getClient(), cass, start, stop, metric);
+      }
     } catch (Exception e) {
       LOG.error("Exception ", e);
     } finally {
@@ -104,13 +113,14 @@ final class Main {
 
 
 
-  public static void migrateData(TSDB tsdb, HBaseClient client, CassandraClient cass, String metric_name) throws Exception {
+  public static void migrateData(TSDB tsdb, HBaseClient client, CassandraClient cass, int start, int stop, String metric_name) throws Exception {
     Query query = tsdb.newQuery();
 
     RateOptions rate_options = new RateOptions(false, Long.MAX_VALUE,
         RateOptions.DEFAULT_RESET_VALUE);
     final HashMap<String, String> t = new HashMap<String, String>();
-    query.setStartTime(0);
+    query.setStartTime(start);
+    query.setEndTime(stop);
     query.setTimeSeries(metric_name, t, Aggregators.get("sum"), false, rate_options);
 
     final StringBuilder buf = new StringBuilder();
