@@ -187,12 +187,12 @@ final class CassandraClient {
     // Shrink the ID on the requested number of bytes.
     rowKey = Arrays.copyOfRange(rowKey, rowKey.length - id_width, rowKey.length);
 
-    if (!compareAndSet(TSDB_UID_NAME_CAS, TSDB_UID_NAME, rowKey, toBytes(kind), name, EMPTY_ARRAY)) {
+    if (!compareAndSet(TSDB_UID_NAME_CAS, TSDB_UID_NAME, toBytes(kind), rowKey, name, EMPTY_ARRAY)) {
       final String message = "Unable to set name for " + fromBytes(name);
       throw new Exception(message);
     }
 
-    if (!compareAndSet(TSDB_UID_ID_CAS, TSDB_UID_ID, name, toBytes(kind), rowKey, EMPTY_ARRAY)) {
+    if (!compareAndSet(TSDB_UID_ID_CAS, TSDB_UID_ID, toBytes(kind), name, rowKey, EMPTY_ARRAY)) {
       final String message = "Unable to set ID for " + fromBytes(name);
       throw new Exception(message);
     }
