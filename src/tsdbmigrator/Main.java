@@ -238,7 +238,8 @@ final class Main {
       }
 
       for (Cell cell : cells) {
-        mutation.withRow(cf, final_key)
+        mutation.withTimestamp(base_time * 1000 * 1000)
+                .withRow(cf, final_key)
                 .putColumn(cell.qualifier(), cell.value());
         indexMutation(final_key, cell.qualifier(), mutation);
       }
