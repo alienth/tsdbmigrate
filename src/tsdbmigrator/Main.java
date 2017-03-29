@@ -128,6 +128,7 @@ final class Main {
           LOG.warn("Starting metric " + metric + " on day " + realstart + "-" + realstop);
           migrateData(tsdb, tsdb.getClient(), cass, realstart, realstop, metric);
         }
+        index_cache = new HashMap<ByteBuffer, Boolean>(); // reset the cache
         writer.close();
       }
     } catch (Exception e) {
@@ -217,6 +218,9 @@ final class Main {
   static final short TIMESTAMP_BYTES = 4;
 
   static int indexMutationCount = 0;
+
+  static HashMap<ByteBuffer, Boolean> index_cache = new HashMap<ByteBuffer, Boolean>();
+
   private static void indexMutation(byte[] orig_key, byte[] orig_column, MutationBatch mutation) throws ConnectionException {
     // Take the first 8 bytes of the orig key and put them in the new key.
     // Take the last 6 bytes of the orig key and all of the orig_column and put
@@ -226,6 +230,12 @@ final class Main {
     // Take the timestamp of the orig key, normalize it to a month, and put it in the new key
     // Take the timestamp of the orig key and put it in the column name.
     // Take only the tags from the orig key, and put them the column name.
+
+    ByteBuffer buf = ByteBuffer.wrap(orig_key);
+    if (index_cache.get(buf) != null) {
+      return;
+    }
+    index_cache.put(buf, true);
 
     final byte[] ts = Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
     final int tsInt = Bytes.getInt(ts);
@@ -237,14 +247,8 @@ final class Main {
     System.arraycopy(ts, 0, new_col, 0, ts.length);
     System.arraycopy(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, new_col, TIMESTAMP_BYTES, new_col.length - TIMESTAMP_BYTES);
 
-    // TODO - prevent duplicate puts here.
+
     mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
-    indexMutationCount++;
-    if (indexMutationCount > 500) {
-      mutation.execute();
-      mutation.discardMutations();
-      indexMutationCount = 0;
-    }
   }
 
 
