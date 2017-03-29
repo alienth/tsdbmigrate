@@ -1,6 +1,9 @@
 
 package tsdbmigrator;
 
+import java.io.File;
+import java.nio.ByteBuffer;
+import java.sql.Blob;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -33,7 +36,11 @@ import net.opentsdb.core.RowKey;
 import net.opentsdb.core.TSDB;
 import net.opentsdb.tools.ArgP;
 import net.opentsdb.uid.NoSuchUniqueName;
-import net.opentsdb.utils.Config;
+
+import org.apache.cassandra.config.Config;
+import org.apache.cassandra.dht.Murmur3Partitioner;
+import org.apache.cassandra.exceptions.InvalidRequestException;
+import org.apache.cassandra.io.sstable.CQLSSTableWriter;
 
 // import org.jboss.netty.logging.InternalLoggerFactory;
 // import org.jboss.netty.logging.Slf4JLoggerFactory;
@@ -41,6 +48,22 @@ import net.opentsdb.utils.Config;
 final class Main {
 
   private static final Logger LOG = LoggerFactory.getLogger(Main.class);
+
+  public static final String keyspace = "tsdb";
+  public static final String cf = "cf";
+
+	public static final String SCHEMA = String.format("CREATE TABLE %s.%s (" +
+																										  "key blob, " +
+																										  "column1 blob, " +
+																										  "value blob, " +
+                                                      "PRIMARY KEY (key, column1))" +
+                                                      " WITH COMPACT STORAGE", keyspace, cf);
+
+  public static final String INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?) USING TIMESTAMP ?", keyspace, cf);
+  // public static final String INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?)", keyspace, cf);
+
+  static CQLSSTableWriter.Builder builder = CQLSSTableWriter.builder();
+  static CQLSSTableWriter writer;
 
   public static void main(String[] args) throws Exception {
     ArgP argp = new ArgP();
@@ -58,23 +81,41 @@ final class Main {
     }
 
     // get a config object
-    Config config = CliOptions.getConfig(argp);
+    net.opentsdb.utils.Config config = CliOptions.getConfig(argp);
+
+    // magic
+    Config.setClientMode(true);
 
     final TSDB tsdb = new TSDB(config);
 
     final CassandraClient cass = new CassandraClient(config);
 
-    final int start = Integer.parseInt(argp.get("--start", "0"));
+    int start = Integer.parseInt(argp.get("--start", "0"));
     final int stop = Integer.parseInt(argp.get("--stop", "2114413200"));
     final String[] metrics = argp.get("--metrics", "os.cpu").split(",");
     tsdb.checkNecessaryTablesExist().joinUninterruptibly();
     argp = null;
 
+    File outputDir = new File("./data/" + keyspace + "/" + cf);
+    if (!outputDir.exists() && !outputDir.mkdirs()) {
+      throw new RuntimeException("Can't make output dir: " + outputDir);
+    }
+
+    builder.inDirectory(outputDir).forTable(SCHEMA).using(INSERT_STMT).withPartitioner(new Murmur3Partitioner());
 
     try {
       // migrateIds(tsdb, tsdb.getClient(), cass);
-      for (String metric : metrics) {
-        migrateData(tsdb, tsdb.getClient(), cass, start, stop, metric);
+      int interstart = start - (start % 86400);
+      int interstop = Math.min(interstart + 86400, stop);
+      for (; interstop <= stop && interstart < stop; interstop+=86400, interstart+=86400) {
+        writer = builder.build();
+        for (String metric : metrics) {
+          final int realstop = Math.min(interstop, stop);
+          final int realstart = Math.max(interstart, start);
+          LOG.warn("Starting metric " + metric + " on day " + realstart + "-" + realstop);
+          migrateData(tsdb, tsdb.getClient(), cass, realstart, realstop, metric);
+        }
+        writer.close();
       }
     } catch (Exception e) {
       LOG.error("Exception ", e);
@@ -125,7 +166,7 @@ final class Main {
     try {
     query.setTimeSeries(metric_name, t, Aggregators.get("sum"), false, rate_options);
     } catch (NoSuchUniqueName e) {
-      System.out.println("Can't find metric. Skipping " + metric_name);
+      LOG.warn("Can't find metric. Skipping " + metric_name);
       return;
     }
 
@@ -157,7 +198,7 @@ final class Main {
       if (cass.buffered_mutations.getRowCount() > 0) {
         cass.buffered_mutations.execute();
       }
-    System.out.println("Done with metric " + metric_name);
+    LOG.warn("Done with metric " + metric_name);
   }
 
   static short METRICS_WIDTH = 3;
@@ -222,9 +263,11 @@ final class Main {
       if (cell == null) {
         throw new IllegalDataException("Unable to parse row: " + kv);
       }
-        mutation.withTimestamp(base_time * 1000 * 1000) // microseconds
-                .withRow(cf, final_key)
-                .putColumn(cell.qualifier(), cell.value());
+        // mutation.withTimestamp(base_time * 1000 * 1000) // microseconds
+        //         .withRow(cf, final_key)
+        //         .putColumn(cell.qualifier(), cell.value());
+        // writer.addRow(final_key, cell.qualifier(), cell.value());
+        writer.addRow(ByteBuffer.wrap(final_key), ByteBuffer.wrap(cell.qualifier()), ByteBuffer.wrap(cell.value()), base_time * 1000 * 1000);
         indexMutation(final_key, cell.qualifier(), mutation);
     } else {
       final Collection<Cell> cells;
@@ -238,9 +281,11 @@ final class Main {
       }
 
       for (Cell cell : cells) {
-        mutation.withTimestamp(base_time * 1000 * 1000)
-                .withRow(cf, final_key)
-                .putColumn(cell.qualifier(), cell.value());
+        // mutation.withTimestamp(base_time * 1000 * 1000)
+        //         .withRow(cf, final_key)
+        //         .putColumn(cell.qualifier(), cell.value());
+        // writer.addRow("foo", "bar", "baz");
+        writer.addRow(ByteBuffer.wrap(final_key), ByteBuffer.wrap(cell.qualifier()), ByteBuffer.wrap(cell.value()), base_time * 1000 * 1000);
         indexMutation(final_key, cell.qualifier(), mutation);
       }
     }
@@ -313,6 +358,13 @@ final class Main {
     return newKey;
   }
 
+	public static String bytesToHex(byte[] in) {
+			final StringBuilder sb = new StringBuilder();
+			for(byte b : in) {
+					sb.append(String.format("%02x", b));
+			}
+			return sb.toString();
+	}
 }
 
 
