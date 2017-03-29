@@ -57,7 +57,9 @@ final class Main {
 																										  "column1 blob, " +
 																										  "value blob, " +
                                                       "PRIMARY KEY (key, column1))" +
-                                                      " WITH COMPACT STORAGE", keyspace, cf);
+                                                      " WITH COMPACT STORAGE" +
+                                                      " AND compression = {'chunk_length_in_kb': '64', 'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}" +
+                                                      " AND default_time_to_live = 78796800", keyspace, cf);
 
   public static final String INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?) USING TIMESTAMP ?", keyspace, cf);
   // public static final String INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?)", keyspace, cf);
@@ -73,7 +75,7 @@ final class Main {
     argp.addOption("--delete", "Deletes rows as they are scanned.");
     argp.addOption("--start", "START", "Start time.");
     argp.addOption("--stop", "STOP", "Stop time.");
-    argp.addOption("--metrics", "os.cpu", "Metrics");
+    argp.addOption("--metrics", "tmp/metrics", "File having a newline separated list of metrics.");
     argp.addOption("--data", "./data", "Where to dump the sstables.");
     args = CliOptions.parse(argp, args);
     if (args == null) {
@@ -93,10 +95,19 @@ final class Main {
 
     int start = Integer.parseInt(argp.get("--start", "0"));
     final int stop = Integer.parseInt(argp.get("--stop", "2114413200"));
-    final String[] metrics = argp.get("--metrics", "os.cpu").split(",");
+    final String metricsFileName = argp.get("--metrics", "");
     final String datadir = argp.get("--data", "./data");
     tsdb.checkNecessaryTablesExist().joinUninterruptibly();
     argp = null;
+
+
+    File metricsFile = new File(metricsFileName);
+    java.util.Scanner sc = new java.util.Scanner(metricsFile);
+
+    ArrayList<String> metrics = new ArrayList<String>();
+    while (sc.hasNextLine()) {
+      metrics.add(sc.nextLine());
+    }
 
     File outputDir = new File(datadir + "/" + keyspace + "/" + cf);
     if (!outputDir.exists() && !outputDir.mkdirs()) {
