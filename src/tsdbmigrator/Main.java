@@ -183,25 +183,21 @@ final class Main {
       return;
     }
 
-    final StringBuilder buf = new StringBuilder();
     final List<Scanner> scanners = Internal.getScanners(query);
       for (Scanner scanner : scanners) {
         ArrayList<ArrayList<KeyValue>> rows;
         while ((rows = scanner.nextRows().joinUninterruptibly()) != null) {
           for (final ArrayList<KeyValue> row : rows) {
-            buf.setLength(0);
             final byte[] key = row.get(0).key();
             final long base_time = Internal.baseTime(tsdb, key);
             final String metric = Internal.metricName(tsdb, key);
 
             for (final KeyValue kv : row) {
-              sendDataPoint(buf, tsdb, cass, kv, base_time, metric);
+              sendDataPoint(tsdb, cass, kv, base_time, metric);
               if (cass.buffered_mutations.getRowCount() > 500) {
                 cass.buffered_mutations.execute();
                 cass.buffered_mutations.discardMutations();
-                System.out.print(buf);
               }
-
             }
 
           }
@@ -210,6 +206,7 @@ final class Main {
 
       if (cass.buffered_mutations.getRowCount() > 0) {
         cass.buffered_mutations.execute();
+        cass.buffered_mutations.discardMutations();
       }
     LOG.warn("Done with metric " + metric_name);
   }
@@ -219,7 +216,7 @@ final class Main {
   static short TAG_VALUE_WIDTH = 3;
   static final short TIMESTAMP_BYTES = 4;
 
-  private static void indexMutation(byte[] orig_key, byte[] orig_column, MutationBatch mutation) {
+  private static void indexMutation(byte[] orig_key, byte[] orig_column, MutationBatch mutation) throws ConnectionException {
     // Take the first 8 bytes of the orig key and put them in the new key.
     // Take the last 6 bytes of the orig key and all of the orig_column and put
     // them in the new column.
@@ -241,10 +238,14 @@ final class Main {
 
     // TODO - prevent duplicate puts here.
     mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
+    if (mutation.getRowCount() > 500) {
+      mutation.execute();
+      mutation.discardMutations();
+    }
   }
 
 
-  private static void sendDataPoint(final StringBuilder buf,
+  private static void sendDataPoint(
       final TSDB tsdb,
       final CassandraClient cass,
       final KeyValue kv,
