@@ -50,7 +50,7 @@ final class Main {
   private static final Logger LOG = LoggerFactory.getLogger(Main.class);
 
   public static final String keyspace = "tsdb";
-  public static final String cf = "cf";
+  public static final String cf = "t";
 
 	public static final String SCHEMA = String.format("CREATE TABLE %s.%s (" +
 																										  "key blob, " +
@@ -106,7 +106,7 @@ final class Main {
     try {
       // migrateIds(tsdb, tsdb.getClient(), cass);
       int interstart = start - (start % 86400);
-      int interstop = Math.min(interstart + 86400, stop);
+      int interstop = Math.min((interstart + 86400) - 1, stop);
       for (; interstop <= stop && interstart < stop; interstop+=86400, interstart+=86400) {
         writer = builder.build();
         for (String metric : metrics) {
