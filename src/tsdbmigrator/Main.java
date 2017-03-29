@@ -248,7 +248,13 @@ final class Main {
     System.arraycopy(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, new_col, TIMESTAMP_BYTES, new_col.length - TIMESTAMP_BYTES);
 
 
-    mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
+    indexMutationCount++;
+    if (indexMutationCount > 250) {
+      mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
+      mutation.execute();
+      mutation.discardMutations();
+      indexMutationCount = 0;
+    }
   }
 
 
