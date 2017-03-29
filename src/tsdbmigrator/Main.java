@@ -74,6 +74,7 @@ final class Main {
     argp.addOption("--start", "START", "Start time.");
     argp.addOption("--stop", "STOP", "Stop time.");
     argp.addOption("--metrics", "os.cpu", "Metrics");
+    argp.addOption("--data", "./data", "Where to dump the sstables.");
     args = CliOptions.parse(argp, args);
     if (args == null) {
       System.err.print("Invalid usage.");
@@ -93,10 +94,11 @@ final class Main {
     int start = Integer.parseInt(argp.get("--start", "0"));
     final int stop = Integer.parseInt(argp.get("--stop", "2114413200"));
     final String[] metrics = argp.get("--metrics", "os.cpu").split(",");
+    final String datadir = argp.get("--data", "./data");
     tsdb.checkNecessaryTablesExist().joinUninterruptibly();
     argp = null;
 
-    File outputDir = new File("./data/" + keyspace + "/" + cf);
+    File outputDir = new File(datadir + "/" + keyspace + "/" + cf);
     if (!outputDir.exists() && !outputDir.mkdirs()) {
       throw new RuntimeException("Can't make output dir: " + outputDir);
     }
