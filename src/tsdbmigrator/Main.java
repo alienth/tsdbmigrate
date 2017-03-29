@@ -216,6 +216,7 @@ final class Main {
   static short TAG_VALUE_WIDTH = 3;
   static final short TIMESTAMP_BYTES = 4;
 
+  static int indexMutationCount = 0;
   private static void indexMutation(byte[] orig_key, byte[] orig_column, MutationBatch mutation) throws ConnectionException {
     // Take the first 8 bytes of the orig key and put them in the new key.
     // Take the last 6 bytes of the orig key and all of the orig_column and put
@@ -238,9 +239,11 @@ final class Main {
 
     // TODO - prevent duplicate puts here.
     mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
-    if (mutation.getRowCount() > 500) {
+    indexMutationCount++;
+    if (indexMutationCount > 500) {
       mutation.execute();
       mutation.discardMutations();
+      indexMutationCount = 0;
     }
   }
 
