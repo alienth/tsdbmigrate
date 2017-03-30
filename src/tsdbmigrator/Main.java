@@ -197,7 +197,6 @@ final class Main {
               sendDataPoint(tsdb, cass, kv, base_time, metric);
               if (cass.buffered_mutations.getRowCount() > 500) {
                 cass.buffered_mutations.execute();
-                cass.buffered_mutations.discardMutations();
               }
             }
 
@@ -207,7 +206,6 @@ final class Main {
 
       if (cass.buffered_mutations.getRowCount() > 0) {
         cass.buffered_mutations.execute();
-        cass.buffered_mutations.discardMutations();
       }
     LOG.warn("Done with metric " + metric_name);
   }
@@ -249,10 +247,9 @@ final class Main {
 
 
     indexMutationCount++;
-    if (indexMutationCount > 250) {
+    if (indexMutationCount > 100) {
       mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
       mutation.execute();
-      mutation.discardMutations();
       indexMutationCount = 0;
     }
   }

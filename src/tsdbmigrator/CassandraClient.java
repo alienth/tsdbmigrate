@@ -27,6 +27,7 @@ import com.netflix.astyanax.query.RowQuery;
 import com.netflix.astyanax.recipes.locks.BusyLockException;
 import com.netflix.astyanax.recipes.locks.ColumnPrefixDistributedRowLock;
 import com.netflix.astyanax.retry.BoundedExponentialBackoff;
+import com.netflix.astyanax.retry.RetryNTimes;
 import com.netflix.astyanax.serializers.BytesArraySerializer;
 import com.netflix.astyanax.serializers.StringSerializer;
 import com.netflix.astyanax.thrift.ThriftFamilyFactory;
@@ -290,7 +291,7 @@ final class CassandraClient {
       if (columns.get(kind) != null) {
         value = columns.get(kind).getLongValue() + 1;
       }
-      final MutationBatch mutation = keyspace.prepareMutationBatch();
+      final MutationBatch mutation = keyspace.prepareMutationBatch().withRetryPolicy(new RetryNTimes(5));
       mutation.setConsistencyLevel(ConsistencyLevel.CL_LOCAL_QUORUM);
       mutation.withRow(TSDB_UID_ID_CAS, idKey)
         .putColumn(kind, value, null);
