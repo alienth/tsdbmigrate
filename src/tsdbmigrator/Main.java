@@ -115,7 +115,7 @@ final class Main {
     }
 
     builder.inDirectory(outputDir).forTable(SCHEMA).using(INSERT_STMT).withPartitioner(new Murmur3Partitioner());
-    builder.withBufferSizeInMB(1024);
+    builder.withBufferSizeInMB(256);
 
     try {
       // migrateIds(tsdb, tsdb.getClient(), cass);
