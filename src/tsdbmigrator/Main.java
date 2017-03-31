@@ -200,8 +200,9 @@ final class Main {
 
             for (final KeyValue kv : row) {
               sendDataPoint(tsdb, cass, kv, base_time, metric);
-              if (cass.buffered_mutations.getRowCount() > 500) {
+              if (cass.buffered_mutations.getRowCount() > 500 || indexMutationCount > 100) {
                 cass.buffered_mutations.execute();
+                indexMutationCount = 0;
               }
             }
 
@@ -252,11 +253,7 @@ final class Main {
 
 
     indexMutationCount++;
-    if (indexMutationCount > 100) {
-      mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
-      mutation.execute();
-      indexMutationCount = 0;
-    }
+    mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
   }
 
 
