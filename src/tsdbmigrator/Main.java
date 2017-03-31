@@ -108,6 +108,7 @@ final class Main {
     while (sc.hasNextLine()) {
       metrics.add(sc.nextLine());
     }
+    sc.close();
 
     File outputDir = new File(datadir + "/" + keyspace + "/" + cf);
     if (!outputDir.exists() && !outputDir.mkdirs()) {
@@ -119,22 +120,23 @@ final class Main {
 
     try {
       // migrateIds(tsdb, tsdb.getClient(), cass);
-      int interstart = start - (start % 86400);
-      int interstop = Math.min((interstart + 86400) - 1, stop);
-      for (; interstop <= stop && interstart < stop; interstop+=86400, interstart+=86400) {
+      int interstart = start - (start % 7200);
+      int interstop = Math.min((interstart + 7200) - 1, stop);
+      for (; interstop <= stop && interstart < stop; interstop+=7200, interstart+=7200) {
         writer = builder.build();
+        final int realstop = Math.min(interstop, stop);
+        final int realstart = Math.max(interstart, start);
+        LOG.warn("Starting time range " + realstart + "-" + realstop);
         for (String metric : metrics) {
-          final int realstop = Math.min(interstop, stop);
-          final int realstart = Math.max(interstart, start);
-          LOG.warn("Starting metric " + metric + " on day " + realstart + "-" + realstop);
+          // LOG.warn("Starting metric " + metric + " on time range " + realstart + "-" + realstop);
           migrateData(tsdb, tsdb.getClient(), cass, realstart, realstop, metric);
         }
         index_cache = new HashMap<ByteBuffer, Boolean>(); // reset the cache
-        writer.close();
       }
     } catch (Exception e) {
       LOG.error("Exception ", e);
     } finally {
+      writer.close();
       tsdb.shutdown().joinUninterruptibly();
     }
   }
@@ -187,6 +189,7 @@ final class Main {
 
     final List<Scanner> scanners = Internal.getScanners(query);
       for (Scanner scanner : scanners) {
+        scanner.setServerBlockCache(false);
         ArrayList<ArrayList<KeyValue>> rows;
         while ((rows = scanner.nextRows().joinUninterruptibly()) != null) {
           for (final ArrayList<KeyValue> row : rows) {
