@@ -120,9 +120,9 @@ final class Main {
 
     try {
       // migrateIds(tsdb, tsdb.getClient(), cass);
-      int interstart = start - (start % 7200);
-      int interstop = Math.min((interstart + 7200) - 1, stop);
-      for (; interstop <= stop && interstart < stop; interstop+=7200, interstart+=7200) {
+      int interstart = start - (start % 86400);
+      int interstop = Math.min((interstart + 86400) - 1, stop);
+      for (; interstop <= stop && interstart < stop; interstop+=86400, interstart+=86400) {
         writer = builder.build();
         final int realstop = Math.min(interstop, stop);
         final int realstart = Math.max(interstart, start);
@@ -132,11 +132,11 @@ final class Main {
           migrateData(tsdb, tsdb.getClient(), cass, realstart, realstop, metric);
         }
         index_cache = new HashMap<ByteBuffer, Boolean>(); // reset the cache
+        writer.close();
       }
     } catch (Exception e) {
       LOG.error("Exception ", e);
     } finally {
-      writer.close();
       tsdb.shutdown().joinUninterruptibly();
     }
   }
@@ -189,6 +189,7 @@ final class Main {
 
     final List<Scanner> scanners = Internal.getScanners(query);
       for (Scanner scanner : scanners) {
+        scanner.setMaxNumRows(100);
         scanner.setServerBlockCache(false);
         ArrayList<ArrayList<KeyValue>> rows;
         while ((rows = scanner.nextRows().joinUninterruptibly()) != null) {
