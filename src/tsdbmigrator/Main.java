@@ -9,6 +9,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -235,11 +236,12 @@ final class Main {
     // Take the timestamp of the orig key and put it in the column name.
     // Take only the tags from the orig key, and put them the column name.
 
-    ByteBuffer buf = ByteBuffer.wrap(orig_key);
-    if (index_cache.get(buf) != null) {
-      return;
+    synchronized (indexedKeys) {
+      if (indexedKeys.put(ByteBuffer.wrap(orig_key), true) != null) {
+        // We already indexed this key
+        return;
+      }
     }
-    index_cache.put(buf, true);
 
     final byte[] ts = Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
     final int tsInt = Bytes.getInt(ts);
@@ -255,6 +257,7 @@ final class Main {
     indexMutationCount++;
     mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
   }
+
 
 
   private static void sendDataPoint(
@@ -391,6 +394,23 @@ final class Main {
 			}
 			return sb.toString();
 	}
+
+  private static final MaxSizeHashMap<ByteBuffer, Boolean> indexedKeys = new MaxSizeHashMap<ByteBuffer, Boolean>(30000);
+
+  private static class MaxSizeHashMap<K, V> extends LinkedHashMap<K, V> {
+    private static final long serialVersionUID = 1L;
+    private final int maxSize;
+
+    public MaxSizeHashMap(int maxSize) {
+      this.maxSize = maxSize;
+    }
+
+    @Override
+    protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+      return size() > maxSize;
+    }
+  }
+
 }
 
 
