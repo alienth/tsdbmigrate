@@ -211,7 +211,7 @@ final class Main {
       if (cass.buffered_mutations.getRowCount() > 0) {
         cass.buffered_mutations.execute();
       }
-    LOG.warn("Done with metric " + metric_name);
+    // LOG.warn("Done with metric " + metric_name);
   }
 
   static short METRICS_WIDTH = 3;
