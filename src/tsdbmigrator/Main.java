@@ -345,6 +345,7 @@ final class Main {
     byte[] index_key = Arrays.copyOfRange(new_key, 0, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES);
     final byte[] index_col = Arrays.copyOfRange(orig_key, METRICS_WIDTH + SALT_WIDTH + TIMESTAMP_BYTES, orig_key.length);
 
+    indexMutationCount++;
     mutation.withRow(CassandraClient.TSDB_T_INDEX, index_key).putColumn(index_col, new byte[]{0});
   }
 
