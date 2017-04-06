@@ -258,6 +258,96 @@ final class Main {
     mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
   }
 
+  /** Mask for the millisecond qualifier flag */
+  public static final byte MS_BYTE_FLAG = (byte)0xF0;
+
+  /** Flag to set on millisecond qualifier timestamps */
+  public static final int MS_FLAG = 0xF0000000;
+
+  /** Number of LSBs in time_deltas reserved for flags.  */
+  public static final short FLAG_BITS = 4;
+
+  /** Number of LSBs in time_deltas reserved for flags.  */
+  public static final short MS_FLAG_BITS = 6;
+
+  /**
+   * When this bit is set, the value is a floating point value.
+   * Otherwise it's an integer value.
+   */
+  public static final short FLAG_FLOAT = 0x8;
+
+  /** Mask to select the size of a value from the qualifier.  */
+  public static final short LENGTH_MASK = 0x7;
+
+  /** Mask to select all the FLAG_BITS.  */
+  public static final short FLAGS_MASK = FLAG_FLOAT | LENGTH_MASK;
+
+  public static int getOffsetFromQualifier(final byte[] qualifier, 
+      final int offset) {
+    // validateQualifier(qualifier, offset);
+    if ((qualifier[offset] & MS_BYTE_FLAG) == MS_BYTE_FLAG) {
+      return (int)(Bytes.getUnsignedInt(qualifier, offset) & 0x0FFFFFC0) 
+        >>> MS_FLAG_BITS;
+    } else {
+      final int seconds = (Bytes.getUnsignedShort(qualifier, offset) & 0xFFFF) 
+        >>> FLAG_BITS;
+      return seconds * 1000;
+    }
+  }
+
+ public static short getFlagsFromQualifier(final byte[] qualifier, 
+      final int offset) {
+    // validateQualifier(qualifier, offset);
+    if ((qualifier[offset] & MS_BYTE_FLAG) == MS_BYTE_FLAG) {
+      return (short) (qualifier[offset + 3] & FLAGS_MASK); 
+    } else {
+      return (short) (qualifier[offset + 1] & FLAGS_MASK);
+    }
+  }
+
+  private static void tMutation(byte[] orig_key, byte[] orig_column, byte[] value, long base_time, CQLSSTableWriter writer, MutationBatch mutation) throws ConnectionException, Exception {
+    // Take the timestamp of the orig key, normalize it to the 28-day period, and put it in the new key.
+    // Take the metric + tags of the orig key and put it in the new key.
+    // Take the offset from the column, add it to the difference between the orig ts and the new base, and put it in the column.
+    //
+    // If the column is in seconds, we'll use 22 bits to store the offset.
+    // If the column is in MS, we'll need 31 bits to store the offset. - DEPRECATING
+    // We need 4 bits for the format flag.
+
+    final byte[] ts = Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
+    final int tsInt = Bytes.getInt(ts);
+    int month = tsInt - (tsInt % (86400 * 28));
+
+    final int offset = (tsInt - month) + (getOffsetFromQualifier(orig_column, 0) / 1000);
+    final int flags = getFlagsFromQualifier(orig_column, 0);
+    final byte[] new_col = Bytes.fromInt(offset << 10 | flags);
+
+
+    byte[] new_key = Arrays.copyOf(orig_key, orig_key.length);
+    System.arraycopy(Bytes.fromInt(month), 0, new_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES);
+
+    // byte[] new_col = new byte[new_offset.length + flags.length];
+    // System.arraycopy(new_offset, 0, new_col, 0, new_offset.length);
+    // System.arraycopy(flags, 0, new_col, new_offset.length, flags.length);
+    // mutation.withRow(CassandraClient.TSDB_T, new_key)
+    //   .putColumn(new_col, request.value());
+    writer.addRow(ByteBuffer.wrap(new_key), ByteBuffer.wrap(new_col), ByteBuffer.wrap(value), base_time * 1000 * 1000);
+
+    // TODO: We only need to check this once a month now.
+    synchronized (indexedKeys) {
+      if (indexedKeys.put(ByteBuffer.wrap(new_key), true) != null) {
+        // We already indexed this key
+        return;
+      }
+    }
+
+    // Take the tags out of the orig key and place them in the column
+    byte[] index_key = Arrays.copyOfRange(new_key, 0, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES);
+    final byte[] index_col = Arrays.copyOfRange(orig_key, METRICS_WIDTH + SALT_WIDTH + TIMESTAMP_BYTES, orig_key.length);
+
+    mutation.withRow(CassandraClient.TSDB_T_INDEX, index_key).putColumn(index_col, new byte[]{0});
+  }
+
 
 
   private static void sendDataPoint(
@@ -296,8 +386,8 @@ final class Main {
         //         .withRow(cf, final_key)
         //         .putColumn(cell.qualifier(), cell.value());
         // writer.addRow(final_key, cell.qualifier(), cell.value());
-        writer.addRow(ByteBuffer.wrap(final_key), ByteBuffer.wrap(cell.qualifier()), ByteBuffer.wrap(cell.value()), base_time * 1000 * 1000);
-        indexMutation(final_key, cell.qualifier(), mutation);
+        // writer.addRow(ByteBuffer.wrap(final_key), ByteBuffer.wrap(cell.qualifier()), ByteBuffer.wrap(cell.value()), base_time * 1000 * 1000);
+        tMutation(final_key, cell.qualifier(), cell.value(), base_time, writer, mutation);
     } else {
       final Collection<Cell> cells;
       if (q_len == 3) {
@@ -314,8 +404,8 @@ final class Main {
         //         .withRow(cf, final_key)
         //         .putColumn(cell.qualifier(), cell.value());
         // writer.addRow("foo", "bar", "baz");
-        writer.addRow(ByteBuffer.wrap(final_key), ByteBuffer.wrap(cell.qualifier()), ByteBuffer.wrap(cell.value()), base_time * 1000 * 1000);
-        indexMutation(final_key, cell.qualifier(), mutation);
+        // writer.addRow(ByteBuffer.wrap(final_key), ByteBuffer.wrap(cell.qualifier()), ByteBuffer.wrap(cell.value()), base_time * 1000 * 1000);
+        tMutation(final_key, cell.qualifier(), cell.value(), base_time, writer, mutation);
       }
     }
   }
