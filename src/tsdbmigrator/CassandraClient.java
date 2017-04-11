@@ -99,6 +99,7 @@ final class CassandraClient {
   public CassandraClient(final Config config) {
     ast_config = new AstyanaxConfigurationImpl()
       .setDiscoveryType(NodeDiscoveryType.RING_DESCRIBE)
+      .setDefaultReadConsistencyLevel(ConsistencyLevel.CL_LOCAL_QUORUM)
       .setDefaultWriteConsistencyLevel(ConsistencyLevel.CL_LOCAL_QUORUM);
     pool = new ConnectionPoolConfigurationImpl("MyConnectionPool")
       .setPort(config.getInt("asynccassandra.port"))
