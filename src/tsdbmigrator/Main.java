@@ -59,8 +59,8 @@ final class Main {
 																										  "value blob, " +
                                                       "PRIMARY KEY (key, column1))" +
                                                       " WITH COMPACT STORAGE" +
-                                                      " AND compression = {'chunk_length_in_kb': '64', 'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}" +
-                                                      " AND default_time_to_live = 78796800", keyspace, cf);
+                                                      " AND compression = {'chunk_length_in_kb': '64', 'class': 'org.apache.cassandra.io.compress.DeflateCompressor'}" +
+                                                      " ", keyspace, cf);
 
   public static final String INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?) USING TIMESTAMP ?", keyspace, cf);
   // public static final String INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?)", keyspace, cf);
