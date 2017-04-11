@@ -76,6 +76,7 @@ final class Main {
     argp.addOption("--delete", "Deletes rows as they are scanned.");
     argp.addOption("--start", "START", "Start time.");
     argp.addOption("--stop", "STOP", "Stop time.");
+    argp.addOption("--interval", "INTERVAL", "interval.");
     argp.addOption("--metrics", "tmp/metrics", "File having a newline separated list of metrics.");
     argp.addOption("--data", "./data", "Where to dump the sstables.");
     args = CliOptions.parse(argp, args);
@@ -96,6 +97,7 @@ final class Main {
 
     int start = Integer.parseInt(argp.get("--start", "0"));
     final int stop = Integer.parseInt(argp.get("--stop", "2114413200"));
+    final int interval = Integer.parseInt(argp.get("--interval", "86400"));
     final String metricsFileName = argp.get("--metrics", "");
     final String datadir = argp.get("--data", "./data");
     tsdb.checkNecessaryTablesExist().joinUninterruptibly();
@@ -121,9 +123,9 @@ final class Main {
 
     try {
       // migrateIds(tsdb, tsdb.getClient(), cass);
-      int interstart = start - (start % 86400);
-      int interstop = Math.min((interstart + 86400) - 1, stop);
-      for (; interstop <= stop && interstart < stop; interstop+=86400, interstart+=86400) {
+      int interstart = start - (start % interval);
+      int interstop = Math.min((interstart + interval) - 1, stop);
+      for (; interstop <= stop && interstart < stop; interstop+=interval, interstart+=interval) {
         writer = builder.build();
         final int realstop = Math.min(interstop, stop);
         final int realstart = Math.max(interstart, start);
