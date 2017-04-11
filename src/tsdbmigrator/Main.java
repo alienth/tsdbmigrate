@@ -134,6 +134,8 @@ final class Main {
           // LOG.warn("Starting metric " + metric + " on time range " + realstart + "-" + realstop);
           migrateData(tsdb, tsdb.getClient(), cass, realstart, realstop, metric);
         }
+        LOG.warn(dpCount + " datapoints created");
+        dpCount = 0;
         index_cache = new HashMap<ByteBuffer, Boolean>(); // reset the cache
         writer.close();
       }
@@ -143,6 +145,8 @@ final class Main {
       tsdb.shutdown().joinUninterruptibly();
     }
   }
+
+  static long dpCount = 0;
 
   public static void migrateIds(TSDB tsdb, HBaseClient client, CassandraClient cass) throws Exception {
     final Scanner scanner = client.newScanner("tsdb-uid".getBytes());
@@ -334,6 +338,7 @@ final class Main {
     // mutation.withRow(CassandraClient.TSDB_T, new_key)
     //   .putColumn(new_col, request.value());
     writer.addRow(ByteBuffer.wrap(new_key), ByteBuffer.wrap(new_col), ByteBuffer.wrap(value), base_time * 1000 * 1000);
+    dpCount++;
 
     // TODO: We only need to check this once a month now.
     synchronized (indexedKeys) {
