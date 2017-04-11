@@ -164,7 +164,7 @@ final class CassandraClient {
       return idFromCass;
     }
 
-    // System.out.println("Creating ID for " + fromBytes(name));
+    System.out.println("Creating ID for " + fromBytes(name));
 
 
     long uid = atomicIncrement(kind);
@@ -207,16 +207,12 @@ final class CassandraClient {
 
 
     try {
-      ColumnList<byte[]> result = keyspace.prepareQuery(cf)
+      Column<byte[]> result = keyspace.prepareQuery(cf)
         .getKey(key)
+        .getColumn(column)
         .execute().getResult();
 
-      for (Column<byte[]> c : result) {
-        if (Bytes.memcmp(c.getName(), column) == 0) {
-          return c.getByteArrayValue();
-        }
-      }
-      return null;
+      return result.getByteArrayValue();
     } catch (NotFoundException e) {
       return null;
     }
