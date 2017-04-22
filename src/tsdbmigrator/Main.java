@@ -2,7 +2,9 @@
 package tsdbmigrator;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
 import java.sql.Blob;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -12,6 +14,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 
 import org.hbase.async.Bytes;
 import org.hbase.async.HBaseClient;
@@ -52,6 +55,9 @@ final class Main {
 
   public static final String keyspace = "tsdb";
   public static final String cf = "t";
+  public static final String cfIndex = "tindex";
+
+  private static final Charset CHARSET = Charset.forName("ISO-8859-1");
 
 	public static final String SCHEMA = String.format("CREATE TABLE %s.%s (" +
 																										  "key blob, " +
@@ -62,11 +68,24 @@ final class Main {
                                                       " AND compression = {'chunk_length_in_kb': '64', 'class': 'org.apache.cassandra.io.compress.DeflateCompressor'}" +
                                                       " ", keyspace, cf);
 
+  public static final String INDEX_SCHEMA = String.format("CREATE TABLE %s.%s (" +
+																										  "key blob, " +
+																										  "column1 blob, " +
+																										  "value blob, " +
+                                                      "PRIMARY KEY (key, column1))" +
+                                                      " WITH COMPACT STORAGE" +
+                                                      " AND compression = {'chunk_length_in_kb': '64', 'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}" +
+                                                      " ", keyspace, cfIndex);
+
   public static final String INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?) USING TIMESTAMP ?", keyspace, cf);
   // public static final String INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?)", keyspace, cf);
 
   static CQLSSTableWriter.Builder builder = CQLSSTableWriter.builder();
+  static CQLSSTableWriter.Builder indexBuilder = CQLSSTableWriter.builder();
   static CQLSSTableWriter writer;
+  static CQLSSTableWriter indexWriter;
+
+  static TSDB tsdb;
 
   public static void main(String[] args) throws Exception {
     ArgP argp = new ArgP();
@@ -91,9 +110,9 @@ final class Main {
     // magic
     Config.setClientMode(true);
 
-    final TSDB tsdb = new TSDB(config);
+    tsdb = new TSDB(config);
 
-    final CassandraClient cass = new CassandraClient(config);
+    // final CassandraClient cass = new CassandraClient(config);
 
     int start = Integer.parseInt(argp.get("--start", "0"));
     final int stop = Integer.parseInt(argp.get("--stop", "2114413200"));
@@ -119,6 +138,7 @@ final class Main {
     }
 
     builder.inDirectory(outputDir).forTable(SCHEMA).using(INSERT_STMT).withPartitioner(new Murmur3Partitioner());
+    indexBuilder.inDirectory(outputDir).forTable(INDEX_SCHEMA).using(INSERT_STMT).withPartitioner(new Murmur3Partitioner());
     // builder.withBufferSizeInMB(256);
 
     try {
@@ -127,59 +147,34 @@ final class Main {
       int interstop = Math.min((interstart + interval) - 1, stop);
       for (; interstop <= stop && interstart < stop; interstop+=interval, interstart+=interval) {
         writer = builder.build();
+        indexWriter = builder.build();
+        indexWriter = indexBuilder.build();
         final int realstop = Math.min(interstop, stop);
         final int realstart = Math.max(interstart, start);
         LOG.warn("Starting time range " + realstart + "-" + realstop);
         for (String metric : metrics) {
           // LOG.warn("Starting metric " + metric + " on time range " + realstart + "-" + realstop);
-          migrateData(tsdb, tsdb.getClient(), cass, realstart, realstop, metric);
+          migrateData(tsdb, tsdb.getClient(), realstart, realstop, metric);
         }
         LOG.warn(dpCount + " datapoints created");
         dpCount = 0;
         index_cache = new HashMap<ByteBuffer, Boolean>(); // reset the cache
         writer.close();
+        indexWriter.close();
       }
     } catch (Exception e) {
       LOG.error("Exception ", e);
     } finally {
+      writer.close();
+      indexWriter.close();
       tsdb.shutdown().joinUninterruptibly();
     }
   }
 
   static long dpCount = 0;
 
-  public static void migrateIds(TSDB tsdb, HBaseClient client, CassandraClient cass) throws Exception {
-    final Scanner scanner = client.newScanner("tsdb-uid".getBytes());
-    scanner.setMaxNumRows(1024);
 
-    try {
-      ArrayList<ArrayList<KeyValue>> rows;
-      while ((rows = scanner.nextRows().joinUninterruptibly()) != null) {
-        for (final ArrayList<KeyValue> row : rows) {
-          // found |= printResult(row, CliUtils.ID_FAMILY, true);
-          final Iterator<KeyValue> i = row.iterator();
-          while (i.hasNext()) {
-            final KeyValue kv = i.next();
-            if (Bytes.memcmp(kv.family(), "id".getBytes()) == 0 && Bytes.memcmp(kv.key(), CassandraClient.idKey) != 0) {
-              cass.getOrCreateId(kv.key(), CassandraClient.fromBytes(kv.qualifier()));
-            }
-
-          }
-
-        }
-      }
-    } catch (HBaseException e) {
-      LOG.error("Error while scanning HBase, scanner=" + scanner, e);
-      throw e;
-    } catch (Exception e) {
-      throw e;
-    }
-
-  }
-
-
-
-  public static void migrateData(TSDB tsdb, HBaseClient client, CassandraClient cass, int start, int stop, String metric_name) throws Exception {
+  public static void migrateData(TSDB tsdb, HBaseClient client, int start, int stop, String metric_name) throws Exception {
     Query query = tsdb.newQuery();
 
     RateOptions rate_options = new RateOptions(false, Long.MAX_VALUE,
@@ -206,112 +201,22 @@ final class Main {
             final String metric = Internal.metricName(tsdb, key);
 
             for (final KeyValue kv : row) {
-              sendDataPoint(tsdb, cass, kv, base_time, metric);
-              if (cass.buffered_mutations.getRowCount() > 500 || indexMutationCount > 100) {
-                cass.buffered_mutations.execute();
-                indexMutationCount = 0;
-              }
+              sendDataPoint(tsdb, kv, base_time, metric);
             }
 
           }
         }
       }
-
-      if (cass.buffered_mutations.getRowCount() > 0) {
-        cass.buffered_mutations.execute();
-      }
-    // LOG.warn("Done with metric " + metric_name);
   }
-
-  static short METRICS_WIDTH = 3;
-  static short TAG_NAME_WIDTH = 3;
-  static short TAG_VALUE_WIDTH = 3;
-  static final short TIMESTAMP_BYTES = 4;
-
-  static int indexMutationCount = 0;
 
   static HashMap<ByteBuffer, Boolean> index_cache = new HashMap<ByteBuffer, Boolean>();
 
-  private static void indexMutation(byte[] orig_key, byte[] orig_column, MutationBatch mutation) throws ConnectionException {
-    // Take the first 8 bytes of the orig key and put them in the new key.
-    // Take the last 6 bytes of the orig key and all of the orig_column and put
-    // them in the new column.
-    //
-    // Take the metric of the orig key and put it in the new key
-    // Take the timestamp of the orig key, normalize it to a month, and put it in the new key
-    // Take the timestamp of the orig key and put it in the column name.
-    // Take only the tags from the orig key, and put them the column name.
+  static final byte[] tag_equals = "=".getBytes(CHARSET);
+  static final byte[] tag_delim = ":".getBytes(CHARSET);
 
-    synchronized (indexedKeys) {
-      if (indexedKeys.put(ByteBuffer.wrap(orig_key), true) != null) {
-        // We already indexed this key
-        return;
-      }
-    }
+  static final ByteBuffer buf = ByteBuffer.allocate(2000);
 
-    final byte[] ts = Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
-    final int tsInt = Bytes.getInt(ts);
-    int month = tsInt - (tsInt % (86400 * 28));
-    byte[] new_key = new byte[SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES];
-    byte[] new_col = new byte[orig_key.length - METRICS_WIDTH - SALT_WIDTH];
-    System.arraycopy(orig_key, 0, new_key, 0, SALT_WIDTH + METRICS_WIDTH);
-    System.arraycopy(Bytes.fromInt(month), 0, new_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES);
-    System.arraycopy(ts, 0, new_col, 0, ts.length);
-    System.arraycopy(orig_key, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES, new_col, TIMESTAMP_BYTES, new_col.length - TIMESTAMP_BYTES);
-
-
-    indexMutationCount++;
-    mutation.withRow(CassandraClient.TSDB_T_INDEX, new_key).putColumn(new_col, new byte[]{0});
-  }
-
-  /** Mask for the millisecond qualifier flag */
-  public static final byte MS_BYTE_FLAG = (byte)0xF0;
-
-  /** Flag to set on millisecond qualifier timestamps */
-  public static final int MS_FLAG = 0xF0000000;
-
-  /** Number of LSBs in time_deltas reserved for flags.  */
-  public static final short FLAG_BITS = 4;
-
-  /** Number of LSBs in time_deltas reserved for flags.  */
-  public static final short MS_FLAG_BITS = 6;
-
-  /**
-   * When this bit is set, the value is a floating point value.
-   * Otherwise it's an integer value.
-   */
-  public static final short FLAG_FLOAT = 0x8;
-
-  /** Mask to select the size of a value from the qualifier.  */
-  public static final short LENGTH_MASK = 0x7;
-
-  /** Mask to select all the FLAG_BITS.  */
-  public static final short FLAGS_MASK = FLAG_FLOAT | LENGTH_MASK;
-
-  public static int getOffsetFromQualifier(final byte[] qualifier, 
-      final int offset) {
-    // validateQualifier(qualifier, offset);
-    if ((qualifier[offset] & MS_BYTE_FLAG) == MS_BYTE_FLAG) {
-      return (int)(Bytes.getUnsignedInt(qualifier, offset) & 0x0FFFFFC0) 
-        >>> MS_FLAG_BITS;
-    } else {
-      final int seconds = (Bytes.getUnsignedShort(qualifier, offset) & 0xFFFF) 
-        >>> FLAG_BITS;
-      return seconds * 1000;
-    }
-  }
-
- public static short getFlagsFromQualifier(final byte[] qualifier, 
-      final int offset) {
-    // validateQualifier(qualifier, offset);
-    if ((qualifier[offset] & MS_BYTE_FLAG) == MS_BYTE_FLAG) {
-      return (short) (qualifier[offset + 3] & FLAGS_MASK); 
-    } else {
-      return (short) (qualifier[offset + 1] & FLAGS_MASK);
-    }
-  }
-
-  private static void tMutation(byte[] orig_key, byte[] orig_column, byte[] value, long base_time, CQLSSTableWriter writer, MutationBatch mutation) throws ConnectionException, Exception {
+  private static void tMutation(KeyValue kv, byte[] value) throws IOException {
     // Take the timestamp of the orig key, normalize it to the 28-day period, and put it in the new key.
     // Take the metric + tags of the orig key and put it in the new key.
     // Take the offset from the column, add it to the difference between the orig ts and the new base, and put it in the column.
@@ -320,24 +225,41 @@ final class Main {
     // If the column is in MS, we'll need 31 bits to store the offset. - DEPRECATING
     // We need 4 bits for the format flag.
 
-    final byte[] ts = Arrays.copyOfRange(orig_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES + SALT_WIDTH + METRICS_WIDTH);
-    final int tsInt = Bytes.getInt(ts);
-    int month = tsInt - (tsInt % (86400 * 28));
+    final int base_time = (int) Internal.baseTime(tsdb, kv.key());
+    final String metric_name = Internal.metricName(tsdb, kv.key());
+    final Map<String, String> tags = Internal.getTags(tsdb, kv.key());
+    final short flags = Internal.getFlagsFromQualifier(kv.qualifier());
+    final long timestamp = Internal.getTimestampFromQualifier(kv.qualifier(), (long) base_time) / 1000;
 
-    final int offset = (tsInt - month) + (getOffsetFromQualifier(orig_column, 0) / 1000);
-    final int flags = getFlagsFromQualifier(orig_column, 0);
-    final byte[] new_col = Bytes.fromInt(offset << 10 | flags);
+    buf.clear();
+    boolean first = true;
+    for (Entry<String, String> tag : tags.entrySet()) {
+      if (!first) {
+        buf.put(tag_delim);
+      }
+      buf.put(tag.getKey().getBytes(CHARSET));
+      buf.put(tag_equals);
+      buf.put(tag.getValue().getBytes(CHARSET));
+      first = false;
+    }
 
+    final byte[] tag_bytes = new byte[buf.position()];
+    buf.rewind();
+    buf.get(tag_bytes);
 
-    byte[] new_key = Arrays.copyOf(orig_key, orig_key.length);
-    System.arraycopy(Bytes.fromInt(month), 0, new_key, SALT_WIDTH + METRICS_WIDTH, TIMESTAMP_BYTES);
+    final int offset = (int) (timestamp - (timestamp % 2419200));
 
-    // byte[] new_col = new byte[new_offset.length + flags.length];
-    // System.arraycopy(new_offset, 0, new_col, 0, new_offset.length);
-    // System.arraycopy(flags, 0, new_col, new_offset.length, flags.length);
-    // mutation.withRow(CassandraClient.TSDB_T, new_key)
-    //   .putColumn(new_col, request.value());
-    writer.addRow(ByteBuffer.wrap(new_key), ByteBuffer.wrap(new_col), ByteBuffer.wrap(value), base_time * 1000 * 1000);
+    final byte[] metric_bytes = metric_name.getBytes(CHARSET);
+    final byte[] base_bytes = Bytes.fromInt(base_time);
+    final byte[] new_key = new byte[metric_bytes.length + 1 + base_bytes.length + tag_bytes.length];
+    System.arraycopy(metric_bytes, 0, new_key, 0, metric_bytes.length);
+    System.arraycopy(base_bytes, 0, new_key, metric_bytes.length + 1, base_bytes.length);
+    System.arraycopy(tag_bytes, 0, new_key, metric_bytes.length + 1 + base_bytes.length, tag_bytes.length);
+
+    final byte[] new_qual = Bytes.fromInt((offset << 10) | flags);
+
+    LOG.warn("key: " + bytesToHex(new_key) + "\n");
+    writer.addRow(ByteBuffer.wrap(new_key), ByteBuffer.wrap(new_qual), ByteBuffer.wrap(value), timestamp * 1000 * 1000);
     dpCount++;
 
     // TODO: We only need to check this once a month now.
@@ -348,39 +270,20 @@ final class Main {
       }
     }
 
-    // Take the tags out of the orig key and place them in the column
-    byte[] index_key = Arrays.copyOfRange(new_key, 0, SALT_WIDTH + METRICS_WIDTH + TIMESTAMP_BYTES);
-    final byte[] index_col = Arrays.copyOfRange(orig_key, METRICS_WIDTH + SALT_WIDTH + TIMESTAMP_BYTES, orig_key.length);
-
-    indexMutationCount++;
-    mutation.withRow(CassandraClient.TSDB_T_INDEX, index_key).putColumn(index_col, new byte[]{0});
+    final byte[] index_key = Arrays.copyOfRange(new_key, 0, metric_bytes.length + 1 + base_bytes.length);
+    indexWriter.addRow(ByteBuffer.wrap(index_key), ByteBuffer.wrap(tag_bytes), ByteBuffer.wrap(new byte[]{ 0 }), timestamp * 1000 * 1000);
   }
 
 
 
   private static void sendDataPoint(
       final TSDB tsdb,
-      final CassandraClient cass,
       final KeyValue kv,
       final long base_time,
       final String metric) throws ConnectionException, Exception {
 
-    final MutationBatch mutation = cass.buffered_mutations;
     final byte[] qualifier = kv.qualifier();
-    // final byte[] value = kv.value();
     final int q_len = qualifier.length;
-    final ColumnFamily<byte[], byte[]> cf = cass.column_family_schemas.get("t".getBytes());
-
-    final String metricName = Internal.metricName(tsdb, kv.key());
-
-    byte[] key = kv.key();
-    if (SALT_WIDTH > 0) {
-      key = saltKey(kv.key());
-    }
-    final byte[] final_key = reIdKey(cass, key, Internal.getTags(tsdb, kv.key()), metricName);
-
-    // System.out.print("orig:   " + Bytes.pretty(kv.key()) + " " + kv.key().length + "\n");
-    // System.out.print("final:  " + Bytes.pretty(final_key) + " " + final_key.length + "\n");
 
     if (!AppendDataPoints.isAppendDataPoints(qualifier) && q_len % 2 != 0) {
       // custom data object, not a data point
@@ -390,12 +293,7 @@ final class Main {
       if (cell == null) {
         throw new IllegalDataException("Unable to parse row: " + kv);
       }
-        // mutation.withTimestamp(base_time * 1000 * 1000) // microseconds
-        //         .withRow(cf, final_key)
-        //         .putColumn(cell.qualifier(), cell.value());
-        // writer.addRow(final_key, cell.qualifier(), cell.value());
-        // writer.addRow(ByteBuffer.wrap(final_key), ByteBuffer.wrap(cell.qualifier()), ByteBuffer.wrap(cell.value()), base_time * 1000 * 1000);
-        tMutation(final_key, cell.qualifier(), cell.value(), base_time, writer, mutation);
+        tMutation(kv, cell.value());
     } else {
       final Collection<Cell> cells;
       if (q_len == 3) {
@@ -408,81 +306,9 @@ final class Main {
       }
 
       for (Cell cell : cells) {
-        // mutation.withTimestamp(base_time * 1000 * 1000)
-        //         .withRow(cf, final_key)
-        //         .putColumn(cell.qualifier(), cell.value());
-        // writer.addRow("foo", "bar", "baz");
-        // writer.addRow(ByteBuffer.wrap(final_key), ByteBuffer.wrap(cell.qualifier()), ByteBuffer.wrap(cell.value()), base_time * 1000 * 1000);
-        tMutation(final_key, cell.qualifier(), cell.value(), base_time, writer, mutation);
+        tMutation(kv, cell.value());
       }
     }
-  }
-
-  static int SALT_WIDTH = 1;
-  static int SALT_BUCKETS = 5;
-
-  // Cobbled together from RowKey.prefixKeyWithSalt
-  private static byte[] saltKey(byte[] key) {
-    final byte[] newKey = 
-        new byte[SALT_WIDTH + key.length];
-    System.arraycopy(key, 0, newKey, SALT_WIDTH, key.length);
-
-    final int tags_start = SALT_WIDTH + TSDB.metrics_width() + 
-        Const.TIMESTAMP_BYTES;
-
-    // we want the metric and tags, not the timestamp
-    final byte[] salt_base = 
-        new byte[newKey.length - SALT_WIDTH - Const.TIMESTAMP_BYTES];
-    System.arraycopy(newKey, SALT_WIDTH, salt_base, 0, TSDB.metrics_width());
-    System.arraycopy(newKey, tags_start,salt_base, TSDB.metrics_width(), 
-        newKey.length - tags_start);
-    int modulo = Arrays.hashCode(salt_base) % SALT_BUCKETS;
-    if (modulo < 0) {
-      // make sure we return a positive salt.
-      modulo = modulo * -1;
-    }
-
-    final byte[] salt = getSaltBytes(modulo);
-    System.arraycopy(salt, 0, newKey, 0, SALT_WIDTH);
-    return newKey;
-  }
-
-  // RowKey.getSaltBytes
-  public static byte[] getSaltBytes(final int bucket) {
-    final byte[] bytes = new byte[SALT_WIDTH];
-    int shift = 0;
-    for (int i = 1;i <= SALT_WIDTH; i++) {
-      bytes[SALT_WIDTH - i] = (byte) (bucket >>> shift);
-      shift += 8;
-    }
-    return bytes;
-  }
-
-  private static byte[] reIdKey(CassandraClient cass, byte[] key, Map<String, String> tags, String metricName) throws ConnectionException, Exception {
-    final int tags_start = SALT_WIDTH + TSDB.metrics_width() +
-        Const.TIMESTAMP_BYTES;
-
-    final byte[] newKey = new byte[key.length];
-    System.arraycopy(key, 0, newKey, 0, tags_start);
-
-    int tagPos = tags_start;
-    for (Map.Entry<String, String> entry : tags.entrySet()) {
-      String tagk = entry.getKey();
-      String tagv = entry.getValue();
-
-      final byte[] newTagk = cass.getOrCreateId(tagk.getBytes(), "tagk");
-      final byte[] newTagv = cass.getOrCreateId(tagv.getBytes(), "tagv");
-
-      System.arraycopy(newTagk, 0, newKey, tagPos, TSDB.tagk_width());
-      tagPos += TSDB.tagk_width();
-      System.arraycopy(newTagv, 0, newKey, tagPos, TSDB.tagv_width());
-      tagPos += TSDB.tagv_width();
-    }
-
-    final byte[] newMetric = cass.getOrCreateId(metricName.getBytes(), "metrics");
-    System.arraycopy(newMetric, 0, newKey, SALT_WIDTH, TSDB.metrics_width());
-
-    return newKey;
   }
 
 	public static String bytesToHex(byte[] in) {
