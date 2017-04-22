@@ -9,6 +9,7 @@ import java.sql.Blob;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -222,14 +223,6 @@ final class Main {
   static final ByteBuffer buf = ByteBuffer.allocate(2000);
 
   private static void tMutation(KeyValue kv, byte[] value) throws IOException {
-    // Take the timestamp of the orig key, normalize it to the 28-day period, and put it in the new key.
-    // Take the metric + tags of the orig key and put it in the new key.
-    // Take the offset from the column, add it to the difference between the orig ts and the new base, and put it in the column.
-    //
-    // If the column is in seconds, we'll use 22 bits to store the offset.
-    // If the column is in MS, we'll need 31 bits to store the offset. - DEPRECATING
-    // We need 4 bits for the format flag.
-
     final int base_time = (int) Internal.baseTime(tsdb, kv.key());
     final String metric_name = Internal.metricName(tsdb, kv.key());
     final Map<String, String> tags = Internal.getTags(tsdb, kv.key());
@@ -238,13 +231,15 @@ final class Main {
 
     buf.clear();
     boolean first = true;
-    for (Entry<String, String> tag : tags.entrySet()) {
+    final List<String> sorted_tagks = new ArrayList<String>(tags.keySet());
+    Collections.sort(sorted_tagks);
+    for (final String tagk : sorted_tagks) {
       if (!first) {
         buf.put(tag_delim);
       }
-      buf.put(tag.getKey().getBytes(CHARSET));
+      buf.put(tagk.getBytes(CHARSET));
       buf.put(tag_equals);
-      buf.put(tag.getValue().getBytes(CHARSET));
+      buf.put(tags.get(tagk).getBytes(CHARSET));
       first = false;
     }
 
