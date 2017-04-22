@@ -222,12 +222,12 @@ final class Main {
 
   static final ByteBuffer buf = ByteBuffer.allocate(2000);
 
-  private static void tMutation(KeyValue kv, byte[] value) throws IOException {
+  private static void tMutation(KeyValue kv, byte[] qual, byte[] value) throws IOException {
     final int base_time = (int) Internal.baseTime(tsdb, kv.key());
     final String metric_name = Internal.metricName(tsdb, kv.key());
     final Map<String, String> tags = Internal.getTags(tsdb, kv.key());
-    final short flags = Internal.getFlagsFromQualifier(kv.qualifier());
-    final long timestamp = Internal.getTimestampFromQualifier(kv.qualifier(), (long) base_time) / 1000;
+    final short flags = Internal.getFlagsFromQualifier(qual);
+    final long timestamp = Internal.getTimestampFromQualifier(qual, (long) base_time) / 1000;
 
     buf.clear();
     boolean first = true;
@@ -247,7 +247,7 @@ final class Main {
     buf.rewind();
     buf.get(tag_bytes);
 
-    final int offset = (int) (timestamp - (timestamp % 2419200));
+    final int offset = (int) (timestamp % 2419200);
 
     final byte[] metric_bytes = metric_name.getBytes(CHARSET);
     final byte[] base_bytes = Bytes.fromInt(base_time);
@@ -258,6 +258,7 @@ final class Main {
 
     final byte[] new_qual = Bytes.fromInt((offset << 10) | flags);
 
+    // LOG.warn("key " + bytesToHex(new_key) + " qual " + bytesToHex(new_qual));
     writer.addRow(ByteBuffer.wrap(new_key), ByteBuffer.wrap(new_qual), ByteBuffer.wrap(value), timestamp * 1000 * 1000);
     dpCount++;
 
@@ -292,7 +293,7 @@ final class Main {
       if (cell == null) {
         throw new IllegalDataException("Unable to parse row: " + kv);
       }
-        tMutation(kv, cell.value());
+        tMutation(kv, kv.qualifier(), cell.value());
     } else {
       final Collection<Cell> cells;
       if (q_len == 3) {
@@ -305,7 +306,7 @@ final class Main {
       }
 
       for (Cell cell : cells) {
-        tMutation(kv, cell.value());
+        tMutation(kv, cell.qualifier(), cell.value());
       }
     }
   }
