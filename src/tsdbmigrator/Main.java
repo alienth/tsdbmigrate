@@ -78,6 +78,7 @@ final class Main {
                                                       " ", keyspace, cfIndex);
 
   public static final String INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?) USING TIMESTAMP ?", keyspace, cf);
+  public static final String INDEX_INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?) USING TIMESTAMP ?", keyspace, cfIndex);
   // public static final String INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?)", keyspace, cf);
 
   static CQLSSTableWriter.Builder builder = CQLSSTableWriter.builder();
@@ -137,8 +138,13 @@ final class Main {
       throw new RuntimeException("Can't make output dir: " + outputDir);
     }
 
+    File outputDirIndex = new File(datadir + "/" + keyspace + "/" + cfIndex);
+    if (!outputDirIndex.exists() && !outputDirIndex.mkdirs()) {
+      throw new RuntimeException("Can't make output dir: " + outputDirIndex);
+    }
+
     builder.inDirectory(outputDir).forTable(SCHEMA).using(INSERT_STMT).withPartitioner(new Murmur3Partitioner());
-    indexBuilder.inDirectory(outputDir).forTable(INDEX_SCHEMA).using(INSERT_STMT).withPartitioner(new Murmur3Partitioner());
+    indexBuilder.inDirectory(outputDirIndex).forTable(INDEX_SCHEMA).using(INDEX_INSERT_STMT).withPartitioner(new Murmur3Partitioner());
     // builder.withBufferSizeInMB(256);
 
     try {
@@ -147,7 +153,6 @@ final class Main {
       int interstop = Math.min((interstart + interval) - 1, stop);
       for (; interstop <= stop && interstart < stop; interstop+=interval, interstart+=interval) {
         writer = builder.build();
-        indexWriter = builder.build();
         indexWriter = indexBuilder.build();
         final int realstop = Math.min(interstop, stop);
         final int realstart = Math.max(interstart, start);
@@ -164,9 +169,9 @@ final class Main {
       }
     } catch (Exception e) {
       LOG.error("Exception ", e);
-    } finally {
       writer.close();
       indexWriter.close();
+    } finally {
       tsdb.shutdown().joinUninterruptibly();
     }
   }
