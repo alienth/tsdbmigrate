@@ -223,11 +223,13 @@ final class Main {
   static final ByteBuffer buf = ByteBuffer.allocate(2000);
 
   private static void tMutation(KeyValue kv, byte[] qual, byte[] value) throws IOException {
-    final int base_time = (int) Internal.baseTime(tsdb, kv.key());
+    int base_time = (int) Internal.baseTime(tsdb, kv.key());
     final String metric_name = Internal.metricName(tsdb, kv.key());
     final Map<String, String> tags = Internal.getTags(tsdb, kv.key());
     final short flags = Internal.getFlagsFromQualifier(qual);
     final long timestamp = Internal.getTimestampFromQualifier(qual, (long) base_time) / 1000;
+
+    base_time -= base_time % 2419200;
 
     buf.clear();
     boolean first = true;
