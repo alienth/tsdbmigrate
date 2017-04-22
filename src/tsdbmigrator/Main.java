@@ -258,7 +258,6 @@ final class Main {
 
     final byte[] new_qual = Bytes.fromInt((offset << 10) | flags);
 
-    LOG.warn("key: " + bytesToHex(new_key) + "\n");
     writer.addRow(ByteBuffer.wrap(new_key), ByteBuffer.wrap(new_qual), ByteBuffer.wrap(value), timestamp * 1000 * 1000);
     dpCount++;
 
