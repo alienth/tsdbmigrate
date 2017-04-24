@@ -235,14 +235,18 @@ final class Main {
     boolean first = true;
     final List<String> sorted_tagks = new ArrayList<String>(tags.keySet());
     Collections.sort(sorted_tagks);
-    for (final String tagk : sorted_tagks) {
-      if (!first) {
-        buf.put(tag_delim);
+    try {
+      for (final String tagk : sorted_tagks) {
+        if (!first) {
+          buf.put(tag_delim);
+        }
+        buf.put(tagk.getBytes(CHARSET));
+        buf.put(tag_equals);
+        buf.put(tags.get(tagk).getBytes(CHARSET));
+        first = false;
       }
-      buf.put(tagk.getBytes(CHARSET));
-      buf.put(tag_equals);
-      buf.put(tags.get(tagk).getBytes(CHARSET));
-      first = false;
+    } catch (BufferOverflowException e) {
+      throw new BufferOverflowException("Metric " + metric_name + " tagset too large: " + tags);
     }
 
     final byte[] tag_bytes = new byte[buf.position()];
