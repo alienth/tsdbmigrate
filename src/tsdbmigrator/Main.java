@@ -220,7 +220,7 @@ final class Main {
   static final byte[] tag_equals = "=".getBytes(CHARSET);
   static final byte[] tag_delim = ":".getBytes(CHARSET);
 
-  static final ByteBuffer buf = ByteBuffer.allocate(2000);
+  static final ByteBuffer buf = ByteBuffer.allocate(20000);
 
   private static void tMutation(KeyValue kv, byte[] qual, byte[] value) throws IOException {
     int base_time = (int) Internal.baseTime(tsdb, kv.key());
