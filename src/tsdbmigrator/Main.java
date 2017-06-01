@@ -2,50 +2,41 @@
 package tsdbmigrator;
 
 import java.io.File;
-import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.charset.Charset;
-import java.sql.Blob;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.HashSet;
 
 import org.hbase.async.Bytes;
 import org.hbase.async.HBaseClient;
-import org.hbase.async.HBaseException;
 import org.hbase.async.KeyValue;
 import org.hbase.async.Scanner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.netflix.astyanax.MutationBatch;
-import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
-import com.netflix.astyanax.model.ColumnFamily;
-
 import net.opentsdb.core.Aggregators;
 import net.opentsdb.core.AppendDataPoints;
-import net.opentsdb.core.Const;
 import net.opentsdb.core.IllegalDataException;
 import net.opentsdb.core.Internal;
 import net.opentsdb.core.Internal.Cell;
 import net.opentsdb.core.Query;
 import net.opentsdb.core.RateOptions;
-import net.opentsdb.core.RowKey;
 import net.opentsdb.core.TSDB;
 import net.opentsdb.tools.ArgP;
 import net.opentsdb.uid.NoSuchUniqueName;
 
-import org.apache.cassandra.config.Config;
-import org.apache.cassandra.dht.Murmur3Partitioner;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.io.sstable.CQLSSTableWriter;
+import com.microsoft.sqlserver.jdbc.*;
+
+import java.sql.*;
+
+import org.apache.commons.dbcp2.*;
 
 // import org.jboss.netty.logging.InternalLoggerFactory;
 // import org.jboss.netty.logging.Slf4JLoggerFactory;
@@ -54,40 +45,17 @@ final class Main {
 
   private static final Logger LOG = LoggerFactory.getLogger(Main.class);
 
-  public static final String keyspace = "tsdb";
-  public static final String cf = "t";
-  public static final String cfIndex = "tindex";
-
-  private static final Charset CHARSET = Charset.forName("ISO-8859-1");
-
-	public static final String SCHEMA = String.format("CREATE TABLE %s.%s (" +
-																										  "key blob, " +
-																										  "column1 blob, " +
-																										  "value blob, " +
-                                                      "PRIMARY KEY (key, column1))" +
-                                                      " WITH COMPACT STORAGE" +
-                                                      " AND compression = {'chunk_length_in_kb': '64', 'class': 'org.apache.cassandra.io.compress.DeflateCompressor'}" +
-                                                      " ", keyspace, cf);
-
-  public static final String INDEX_SCHEMA = String.format("CREATE TABLE %s.%s (" +
-																										  "key blob, " +
-																										  "column1 blob, " +
-																										  "value blob, " +
-                                                      "PRIMARY KEY (key, column1))" +
-                                                      " WITH COMPACT STORAGE" +
-                                                      " AND compression = {'chunk_length_in_kb': '64', 'class': 'org.apache.cassandra.io.compress.LZ4Compressor'}" +
-                                                      " ", keyspace, cfIndex);
-
-  public static final String INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?) USING TIMESTAMP ?", keyspace, cf);
-  public static final String INDEX_INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?) USING TIMESTAMP ?", keyspace, cfIndex);
+  // public static final String INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?) USING TIMESTAMP ?", keyspace, cf);
+  // public static final String INDEX_INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?) USING TIMESTAMP ?", keyspace, cfIndex);
   // public static final String INSERT_STMT = String.format("INSERT INTO %s.%s (key, column1, value) VALUES (?, ?, ?)", keyspace, cf);
 
-  static CQLSSTableWriter.Builder builder = CQLSSTableWriter.builder();
-  static CQLSSTableWriter.Builder indexBuilder = CQLSSTableWriter.builder();
-  static CQLSSTableWriter writer;
-  static CQLSSTableWriter indexWriter;
-
   static TSDB tsdb;
+
+  static BasicDataSource connectionPool;
+
+  static private Map<String, DatapointBatch> buffered_datapoint = new HashMap<String, DatapointBatch>();
+  static private final AtomicLong num_buffered_pushes = new AtomicLong();
+
 
   public static void main(String[] args) throws Exception {
     ArgP argp = new ArgP();
@@ -109,9 +77,6 @@ final class Main {
     // get a config object
     net.opentsdb.utils.Config config = CliOptions.getConfig(argp);
 
-    // magic
-    Config.setClientMode(true);
-
     tsdb = new TSDB(config);
 
     // final CassandraClient cass = new CassandraClient(config);
@@ -120,7 +85,6 @@ final class Main {
     final int stop = Integer.parseInt(argp.get("--stop", "2114413200"));
     final int interval = Integer.parseInt(argp.get("--interval", "86400"));
     final String metricsFileName = argp.get("--metrics", "");
-    final String datadir = argp.get("--data", "./data");
     tsdb.checkNecessaryTablesExist().joinUninterruptibly();
     argp = null;
 
@@ -134,27 +98,16 @@ final class Main {
     }
     sc.close();
 
-    File outputDir = new File(datadir + "/" + keyspace + "/" + cf);
-    if (!outputDir.exists() && !outputDir.mkdirs()) {
-      throw new RuntimeException("Can't make output dir: " + outputDir);
-    }
-
-    File outputDirIndex = new File(datadir + "/" + keyspace + "/" + cfIndex);
-    if (!outputDirIndex.exists() && !outputDirIndex.mkdirs()) {
-      throw new RuntimeException("Can't make output dir: " + outputDirIndex);
-    }
-
-    builder.inDirectory(outputDir).forTable(SCHEMA).using(INSERT_STMT).withPartitioner(new Murmur3Partitioner());
-    indexBuilder.inDirectory(outputDirIndex).forTable(INDEX_SCHEMA).using(INDEX_INSERT_STMT).withPartitioner(new Murmur3Partitioner());
-    // builder.withBufferSizeInMB(256);
+    connectionPool = new BasicDataSource();
+    connectionPool.setDriverClassName("com.microsoft.sqlserver.jdbc.SQLServerDriver");
+    connectionPool.setUrl(String.format("jdbc:sqlserver://%s;user=%s;password=%s", config.getString("sql.server"), config.getString("sql.user"), config.getString("sql.password")));
+    connectionPool.setInitialSize(10);
 
     try {
       // migrateIds(tsdb, tsdb.getClient(), cass);
       int interstart = start - (start % interval);
       int interstop = Math.min((interstart + interval) - 1, stop);
       for (; interstop <= stop && interstart < stop; interstop+=interval, interstart+=interval) {
-        writer = builder.build();
-        indexWriter = indexBuilder.build();
         final int realstop = Math.min(interstop, stop);
         final int realstart = Math.max(interstart, start);
         LOG.warn("Starting time range " + realstart + "-" + realstop);
@@ -164,15 +117,11 @@ final class Main {
         }
         LOG.warn(dpCount + " datapoints created");
         dpCount = 0;
-        index_cache = new HashMap<ByteBuffer, Boolean>(); // reset the cache
-        writer.close();
-        indexWriter.close();
       }
     } catch (Exception e) {
       LOG.error("Exception ", e);
-      writer.close();
-      indexWriter.close();
     } finally {
+      insertInternal(buffered_datapoint);
       tsdb.shutdown().joinUninterruptibly();
     }
   }
@@ -215,69 +164,175 @@ final class Main {
       }
   }
 
-  static HashMap<ByteBuffer, Boolean> index_cache = new HashMap<ByteBuffer, Boolean>();
-
-  static final byte[] tag_equals = "=".getBytes(CHARSET);
-  static final byte[] tag_delim = ":".getBytes(CHARSET);
+  static private HashMap<String, Set<String>> tables = new HashMap<String, Set<String>>();
 
   static final ByteBuffer buf = ByteBuffer.allocate(20000);
 
-  private static void tMutation(KeyValue kv, byte[] qual, byte[] value) throws IOException {
+  private static void tMutation(KeyValue kv, byte[] qual, Number value) throws SQLException {
     int base_time = (int) Internal.baseTime(tsdb, kv.key());
-    final String metric_name = Internal.metricName(tsdb, kv.key());
-    final Map<String, String> tags = Internal.getTags(tsdb, kv.key());
-    final short flags = Internal.getFlagsFromQualifier(qual);
-    final long timestamp = Internal.getTimestampFromQualifier(qual, (long) base_time) / 1000;
+    final String metric = Internal.metricName(tsdb, kv.key());
+    final Map<String, String> tagm = Internal.getTags(tsdb, kv.key());
+    // final short flags = Internal.getFlagsFromQualifier(qual);
+    final long timestamp = Internal.getTimestampFromQualifier(qual, (long) base_time);
 
-    base_time -= base_time % 2419200;
+    final Set<String> tagSet = tagm.keySet();
 
-    buf.clear();
-    boolean first = true;
-    final List<String> sorted_tagks = new ArrayList<String>(tags.keySet());
-    Collections.sort(sorted_tagks);
-    try {
-      for (final String tagk : sorted_tagks) {
-        if (!first) {
-          buf.put(tag_delim);
+    Set<String> tableTags;
+    synchronized(tables) {
+      tableTags = tables.get(metric);
+    }
+    if (tableTags == null || ! tableTags.containsAll(tagSet)) {
+      try (Connection connection = connectionPool.getConnection()) {
+        LOG.warn("Syncing schema for metric " + metric);
+        syncSchema(connection, metric, tagSet);
+      }
+    }
+
+    synchronized (buffered_datapoint) {
+      DatapointBatch dps = buffered_datapoint.get(metric);
+      if (dps == null) {
+        dps = new DatapointBatch();
+        buffered_datapoint.put(metric, dps);
+      }
+      Datapoint dp = new Datapoint(metric, tagm, timestamp, value.doubleValue());
+      dps.add(dp);
+      if (num_buffered_pushes.incrementAndGet() > 100000) {
+        num_buffered_pushes.set(0);
+        insertInternal(buffered_datapoint);
+        buffered_datapoint = new HashMap<String, DatapointBatch>();
+      }
+    }
+
+  }
+
+  public static void insertInternal(Map<String, DatapointBatch> batches) {
+    try (Connection connection = DriverManager.getConnection(connectionPool.getUrl())) {
+    // try (Connection connection = connectionPool.getConnection()) {
+
+      SQLServerBulkCopy bulkCopy = new SQLServerBulkCopy(connection);
+      for (Entry<String, DatapointBatch> entry : batches.entrySet()) {
+
+				// for (Datapoint dp : entry.getValue().dps) {
+					// final StringBuilder columns = new StringBuilder(100);
+					// final StringBuilder values = new StringBuilder(20);
+          // final String[] tagKeys = new String[dp.tagm.size()];
+          // dp.tagm.keySet().toArray(tagKeys);
+					// for (String key : tagKeys) {
+					// 	columns.append("[tag.");
+					// 	columns.append(key);
+					// 	columns.append("], ");
+					// 	values.append("?,");
+					// }
+					// columns.append("timestamp, value");
+					// values.append(" ?, ?");
+
+					// // TODO: prevent injection
+					// String insert = String.format("INSERT INTO [dbo].[%s] (%s) VALUES (%s)", dp.metric, columns, values);
+					// PreparedStatement prep = connection.prepareStatement(insert);
+					// // stmt.setString(1, metric);
+
+					// final int tagCount = dp.tagm.size();
+					// for (int i = 0; i < tagCount; i++) {
+					// 	prep.setString(i+1, dp.tagm.get(tagKeys[i]));
+					// }
+					// prep.setTimestamp(tagCount+1, new Timestamp(dp.timestamp));
+					// prep.setDouble(tagCount+2, dp.value);
+					// prep.executeUpdate();
+					// // stmt.setDate(request.t
+					// // Statement stmt = connection.createStatement();
+				// }
+			// }
+
+
+
+        LOG.warn("Pushing datapoints for " + entry.getKey());
+        bulkCopy.addColumnMapping("value", "value");
+        bulkCopy.addColumnMapping("timestamp", "timestamp");
+        for (String tag : entry.getValue().tags) {
+          bulkCopy.addColumnMapping(tag, "tag." + tag);
         }
-        buf.put(tagk.getBytes(CHARSET));
-        buf.put(tag_equals);
-        buf.put(tags.get(tagk).getBytes(CHARSET));
-        first = false;
+        bulkCopy.setDestinationTableName("[metrics]." + "[" + entry.getKey() + "]");
+        bulkCopy.writeToServer(entry.getValue());
+        bulkCopy.clearColumnMappings();
       }
-    } catch (BufferOverflowException e) {
-      throw new BufferOverflowException("Metric " + metric_name + " tagset too large: " + tags);
+      bulkCopy.close();
+    } catch (Exception e) {
+      LOG.warn("Exception pushing batch: " + e);
+    }
+  }
+
+  public static void syncSchema(Connection connection, String metric, Set<String> tags) throws SQLException {
+    Statement stmt;
+    DatabaseMetaData md = connection.getMetaData();
+    ResultSet rs = md.getTables(null, "metrics", metric, new String[] {"TABLE"});
+    if (!rs.next()) {
+      final StringBuilder columnDefs = new StringBuilder(100);
+      for (String key : tags) {
+        columnDefs.append("[tag.");
+        columnDefs.append(key);
+        columnDefs.append("] nvarchar(100) NULL,");
+      }
+      columnDefs.append("timestamp datetime NOT NULL, value float NOT NULL");
+
+      String create = String.format("CREATE TABLE [metrics].[%s] (%s);", metric, columnDefs);
+      String index = String.format("CREATE Clustered Columnstore Index [CCI_%s] ON [metrics].[%s];", metric, metric);
+
+      LOG.warn("Creating table " + metric);
+      stmt = connection.createStatement();
+      stmt.executeUpdate(create);
+      stmt = connection.createStatement();
+      stmt.executeUpdate(index);
+
+      Set<String> foo = new HashSet<String>(tags);
+      synchronized (tables) {
+        Set<String> existing = tables.get(metric);
+        if (existing != null) {
+          foo.addAll(existing);
+        }
+        tables.put(metric, foo);
+      }
+    } else {
+      rs = md.getColumns(null, null, metric, "tag.%");
+
+      final Set<String> columnSet = new HashSet<String>();
+      while (rs.next()) {
+        ResultSetMetaData rsMeta = rs.getMetaData();
+        for (int i = 1; i <= rsMeta.getColumnCount(); i++) {
+          String name = rs.getString(i);
+          if (name != null && name.startsWith("tag.")) {
+            columnSet.add(rs.getString(i).replaceFirst("^tag\\.", ""));
+          }
+        }
+      }
+
+      Set<String> foo = new HashSet<String>(tags);
+      foo.removeAll(columnSet);
+
+      if (foo.size() > 0) {
+        final StringBuilder alter = new StringBuilder(200);
+        alter.append(String.format("ALTER TABLE [metrics].[%s] ADD ", metric));
+        for (String column : foo) {
+          alter.append(String.format(" [tag.%s] nvarchar(100) NULL,", column));
+        }
+        alter.setLength(alter.length() - 1);
+
+        LOG.warn("Altering table " + metric);
+        stmt = connection.createStatement();
+        LOG.warn(alter.toString());
+        stmt.executeUpdate(alter.toString());
+      }
+      Set<String> foo2 = new HashSet<String>(tags);
+      synchronized (tables) {
+        Set<String> existing = tables.get(metric);
+        if (existing != null) {
+          foo2.addAll(existing);
+        }
+        tables.put(metric, foo2);
+      }
     }
 
-    final byte[] tag_bytes = new byte[buf.position()];
-    buf.rewind();
-    buf.get(tag_bytes);
 
-    final int offset = (int) (timestamp % 2419200);
 
-    final byte[] metric_bytes = metric_name.getBytes(CHARSET);
-    final byte[] base_bytes = Bytes.fromInt(base_time);
-    final byte[] new_key = new byte[metric_bytes.length + 1 + base_bytes.length + tag_bytes.length];
-    System.arraycopy(metric_bytes, 0, new_key, 0, metric_bytes.length);
-    System.arraycopy(base_bytes, 0, new_key, metric_bytes.length + 1, base_bytes.length);
-    System.arraycopy(tag_bytes, 0, new_key, metric_bytes.length + 1 + base_bytes.length, tag_bytes.length);
-
-    final byte[] new_qual = Bytes.fromInt((offset << 10) | flags);
-
-    // LOG.warn("key " + bytesToHex(new_key) + " qual " + bytesToHex(new_qual));
-    writer.addRow(ByteBuffer.wrap(new_key), ByteBuffer.wrap(new_qual), ByteBuffer.wrap(value), timestamp * 1000 * 1000);
-    dpCount++;
-
-    // TODO: We only need to check this once a month now.
-    synchronized (indexedKeys) {
-      if (indexedKeys.put(ByteBuffer.wrap(new_key), true) != null) {
-        // We already indexed this key
-        return;
-      }
-    }
-
-    final byte[] index_key = Arrays.copyOfRange(new_key, 0, metric_bytes.length + 1 + base_bytes.length);
-    indexWriter.addRow(ByteBuffer.wrap(index_key), ByteBuffer.wrap(tag_bytes), ByteBuffer.wrap(new byte[]{ 0 }), timestamp * 1000 * 1000);
   }
 
 
@@ -286,7 +341,7 @@ final class Main {
       final TSDB tsdb,
       final KeyValue kv,
       final long base_time,
-      final String metric) throws ConnectionException, Exception {
+      final String metric) throws SQLException {
 
     final byte[] qualifier = kv.qualifier();
     final int q_len = qualifier.length;
@@ -299,7 +354,7 @@ final class Main {
       if (cell == null) {
         throw new IllegalDataException("Unable to parse row: " + kv);
       }
-        tMutation(kv, kv.qualifier(), cell.value());
+        tMutation(kv, kv.qualifier(), cell.parseValue());
     } else {
       final Collection<Cell> cells;
       if (q_len == 3) {
@@ -312,7 +367,7 @@ final class Main {
       }
 
       for (Cell cell : cells) {
-        tMutation(kv, cell.qualifier(), cell.value());
+        tMutation(kv, cell.qualifier(), cell.parseValue());
       }
     }
   }
