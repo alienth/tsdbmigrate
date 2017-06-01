@@ -56,6 +56,8 @@ final class Main {
   static private Map<String, DatapointBatch> buffered_datapoint = new HashMap<String, DatapointBatch>();
   static private final AtomicLong num_buffered_pushes = new AtomicLong();
 
+  static net.opentsdb.utils.Config config;
+
 
   public static void main(String[] args) throws Exception {
     ArgP argp = new ArgP();
@@ -75,7 +77,7 @@ final class Main {
     }
 
     // get a config object
-    net.opentsdb.utils.Config config = CliOptions.getConfig(argp);
+    config = CliOptions.getConfig(argp);
 
     tsdb = new TSDB(config);
 
@@ -196,7 +198,8 @@ final class Main {
       }
       Datapoint dp = new Datapoint(metric, tagm, timestamp, value.doubleValue());
       dps.add(dp);
-      if (num_buffered_pushes.incrementAndGet() > 100000) {
+      dpCount++;
+      if (num_buffered_pushes.incrementAndGet() > config.getInt("sql.batchsize")) {
         num_buffered_pushes.set(0);
         insertInternal(buffered_datapoint);
         buffered_datapoint = new HashMap<String, DatapointBatch>();
